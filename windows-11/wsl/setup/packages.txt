@@ -1,0 +1,32 @@
+# Paquetes apt para el entorno CLI de WSL (Debian/Ubuntu, apt). Un nombre por línea; las
+# líneas que son 100% comentario o están en blanco se saltean (ver read_pkg_list en
+# vars.sh). Importante: read_pkg_list NO stripea comentarios al final de una línea de
+# paquete, así que NO poner comentarios inline acá — solo en líneas propias.
+#
+# Solo van acá los paquetes GARANTIZADOS en apt en cualquier release reciente. eza y
+# git-delta NO están acá: pueden no existir en algunas versiones — los resuelve
+# 02-tools.sh (apt si está, si no binario estático). nvim queda afuera por ahora.
+
+# Shell / terminal
+bash-completion
+tmux
+
+# Tools de consola
+fzf
+ripgrep
+
+# fd-find instala el binario `fdfind`; 02-tools.sh crea el shim `fd`.
+fd-find
+
+# bat instala el binario `batcat`; 02-tools.sh crea el shim `bat`.
+bat
+jq
+
+# Base para descargas y build
+git
+curl
+ca-certificates
+unzip
+build-essential
+locales
+stow

@@ -17,6 +17,7 @@ declarativa de paquetes y configs versionadas.
 | tmux                             | paneles de Windows Terminal (sin sesiones persistentes) |
 | nvim (submodulo)                 | el mismo submodulo, linkeado a `%LOCALAPPDATA%\nvim`  |
 | Zed (`settings.json.in` + jq merge) | igual: `dotfiles\zed` mergeado a `%APPDATA%\Zed`    |
+| (terminal dentro de WSL)         | `wsl/` — clon reducido bash + stow (ver mas abajo)    |
 
 ## Setup
 
@@ -45,14 +46,15 @@ ssh-keygen -t ed25519 -C "ndelucca@protonmail.com"
 Get-Content "$HOME\.ssh\id_ed25519.pub"   # agregarla en GitHub -> Settings -> SSH keys
 ```
 
-## Nota sobre WSL
+## WSL
 
-WSL es una terminal aparte y no se provisiona desde este bootstrap. Lo relevante:
+WSL es una terminal aparte (Linux, no PowerShell) y tiene su propio entorno
+**CLI-only** en [`wsl/`](wsl/README.md): un clon reducido del enfoque bash + stow de
+Fedora que pone a punto bash, tmux, fzf, git+delta y las tools de consola, sin nada de
+escritorio. Se provisiona desde adentro de WSL con `./windows-11/wsl/bootstrap.sh`.
 
-- El clipboard funciona dentro de WSL/Windows Terminal via OSC-52 (ya configurado
-  en el `tmux.conf` de Fedora), sin pasos extra.
+Lo relevante:
+
 - Performance: mantener los repos en el filesystem de Linux (`~`), no en `/mnt/c`.
-- Reutilizacion: dentro de WSL se puede clonar el repo y aplicar el mismo
-  `fedora-sway-spin/dotfiles/.bashrc.d` con stow, sin trabajo nuevo.
-- Starship es multiplataforma: el mismo `starship.toml` podria unificar el prompt
-  de Fedora a futuro.
+- El clipboard de tmux usa `win32yank.exe` + OSC-52 (Windows Terminal), sin Wayland.
+- nvim todavia no esta incluido en `wsl/` (queda como trabajo futuro).

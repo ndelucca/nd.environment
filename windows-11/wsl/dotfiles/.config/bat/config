@@ -1,0 +1,10 @@
+# Config de bat (cat con sintaxis). Un argumento por línea, como en la línea de comando.
+# Symlinkeado por stow junto con el resto de .config. En Debian el binario es batcat, pero
+# 02-tools.sh crea el shim `bat` en ~/.local/bin (y batcat lee igual este config).
+
+# Sin pager: bat vuelca la salida directo (como cat), no la manda a less.
+--paging=never
+
+# `plain`: cat coloreado y nada más — solo resaltado de sintaxis, sin números de línea,
+# sin header, sin grid ni borde. La salida queda casi idéntica a `cat`, pero con color.
+--style=plain
