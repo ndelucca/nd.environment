@@ -14,6 +14,7 @@ sudo git config --system pull.rebase true
 sudo git config --system push.default simple
 sudo git config --system core.autocrlf false
 sudo git config --system core.commentchar ";"
+sudo git config --system core.editor "nvim"
 sudo git config --system color.ui true
 sudo git config --system alias.st status
 
