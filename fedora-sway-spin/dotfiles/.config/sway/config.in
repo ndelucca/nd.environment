@@ -12,8 +12,9 @@ set $term foot
 
 # swayidle: las consume el 90-swayidle.conf del Spin vía include (definidas antes que él).
 # No borrar aunque no se vean referencias locales — sin estas, el idle del Spin se rompe.
-set $lock_timeout 600
-set $screen_timeout 300
+# Bloqueo a los 20 min; pantallas off 10 min después (30 min total).
+set $lock_timeout 1200
+set $screen_timeout 600
 
 # Modos, combi, iconos, matching y tema viven en ~/.config/rofi/config.rasi
 set $menu rofi -show drun
