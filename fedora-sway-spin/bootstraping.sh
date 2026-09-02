@@ -20,6 +20,8 @@ STEPS=(
     "08-systemd-user.sh"
     "09-chromium-policies.sh"
     "10-power.sh"
+    "11-memory.sh"
+    "12-auto-updates.sh"
 )
 
 declare -a OK_STEPS=()

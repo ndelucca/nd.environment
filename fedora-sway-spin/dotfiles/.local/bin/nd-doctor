@@ -1,19 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 #
-# nd-doctor — chequea las suposiciones que este setup hace sobre el Spin.
+# nd-doctor — chequea las suposiciones frágiles de este setup.
 #
-# La estrategia del entorno es "apoyarse en el Spin": varios servicios NO los
-# arrancamos nosotros, los arranca el Spin desde sus /usr/share/sway/config.d/*.conf,
-# y nuestros overrides ganan por mismo nombre de archivo. Si una versión futura del
-# Spin renombra o elimina esos archivos, las cosas dejan de funcionar EN SILENCIO (la
-# barra no aparece, el idle no bloquea, el override no aplica) sin ningún error.
+# Dos bloques, por dos motivos distintos:
+#
+# 1. Archivos del Spin. La estrategia del entorno es "apoyarse en el Spin": varios
+#    servicios NO los arrancamos nosotros, los arranca el Spin desde sus
+#    /usr/share/sway/config.d/*.conf, y nuestros overrides ganan por mismo nombre de
+#    archivo. Si una versión futura del Spin renombra o elimina esos archivos, las cosas
+#    dejan de funcionar EN SILENCIO (la barra no aparece, el idle no bloquea, el override
+#    no aplica) sin ningún error.
+#
+# 2. Suposiciones del entorno propio. Piezas que tampoco controlamos del todo y fallan
+#    igual de calladas: que ~/.bashrc (viene de /etc/skel, no lo versionamos) siga
+#    cargando ~/.bashrc.d, que sea swaync y no otro daemon el dueño del bus de
+#    notificaciones, que los timers nd-* estén corriendo, y que el stow no haya dejado
+#    symlinks rotos tras un rename.
 #
 # Este chequeo materializa esas suposiciones para detectar la deriva de un vistazo.
 # No arregla nada: reporta. Correr tras actualizar el sistema / subir de versión.
+#
+# Los chequeos que necesitan una sesión gráfica (bus de notificaciones, timers de
+# usuario) se SALTEAN, no fallan, cuando no hay sesión — el bootstrap puede correr
+# headless y eso no es un problema del setup.
 
 ok=0
 fail=0
+skip=0
+
+# Directorio de dotfiles del repo, derivado de la ubicación REAL de este script
+# (~/.local/bin/nd-doctor es un symlink a dotfiles/.local/bin/nd-doctor): subiendo tres
+# niveles se llega a dotfiles/. Se usa para detectar symlinks que apuntan al repo.
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+DOTFILES_DIR="$(cd "$(dirname "${SELF}")/../../.." && pwd)"
 
 # Colores solo si la salida es un terminal: nd-doctor se tee-a a un log en el bootstrap
 # y los escapes ANSI ensuciarían ese archivo.
@@ -25,6 +45,8 @@ fi
 
 pass() { printf '  %sOK  %s %s\n' "${C_OK}" "${C_OFF}" "$1"; ((++ok)); }
 miss() { printf '  %sFALTA%s %s\n      %s↳ %s%s\n' "${C_BAD}" "${C_OFF}" "$1" "${C_WHY}" "$2" "${C_OFF}"; ((++fail)); }
+# No cuenta como falla: la condición no se puede evaluar acá (p.ej. bootstrap headless).
+omit() { printf '  %sSKIP %s %s\n      %s↳ %s%s\n' "${C_WHY}" "${C_OFF}" "$1" "${C_WHY}" "$2" "${C_OFF}"; ((++skip)); }
 
 # check_file <ruta> <por qué nos importa> — basta con que exista.
 check_file() {
@@ -58,9 +80,91 @@ check_grep /usr/share/sway/config.d/60-bindings-media.conf playerctl \
     "provee las teclas de medios (play/next/prev → playerctl); no las bindeamos nosotros"
 
 echo
+echo "Suposiciones del entorno propio:"
+
+# ~/.bashrc NO se versiona: viene de /etc/skel y es un archivo real. Todo nuestro shell
+# (prompt, alias, fzf, tmux) cuelga de que ese archivo recorra ~/.bashrc.d. Si un reset
+# del home o una edición a mano se lo lleva, stow sigue dejando los archivos y no pasa
+# absolutamente nada — falla silenciosa perfecta.
+# Los "~/..." de abajo son texto para mostrar, no rutas a expandir: SC2088 no aplica.
+# shellcheck disable=SC2088
+if grep -qs 'bashrc\.d' "${HOME}/.bashrc"; then
+    pass "~/.bashrc carga ~/.bashrc.d"
+else
+    miss "~/.bashrc NO carga ~/.bashrc.d" \
+        "sin ese loop no se aplica nada de dotfiles/.bashrc.d (prompt, alias, fzf, tmux)"
+fi
+
+# Dueño del bus de notificaciones. Debe ser swaync: es quien lo arranca sway/config y el
+# que está tematizado. Si otro daemon (dunst, mako) gana la carrera por el nombre de
+# D-Bus, las notificaciones salen con OTRO estilo o no salen — sin error visible.
+if ! busctl --user --no-pager status >/dev/null 2>&1; then
+    omit "dueño de org.freedesktop.Notifications" "sin bus de sesión (¿bootstrap headless?)"
+else
+    notif_pid="$(busctl --user call org.freedesktop.DBus /org/freedesktop/DBus \
+        org.freedesktop.DBus GetConnectionUnixProcessID s org.freedesktop.Notifications \
+        2>/dev/null | awk '{print $2}')"
+    if [[ -z "${notif_pid}" ]]; then
+        miss "org.freedesktop.Notifications sin dueño" \
+            "no hay daemon de notificaciones corriendo; swaync debería lanzarlo sway/config"
+    else
+        notif_cmd="$(ps -p "${notif_pid}" -o comm= 2>/dev/null || true)"
+        if [[ "${notif_cmd}" == swaync* ]]; then
+            pass "org.freedesktop.Notifications lo sirve swaync"
+        else
+            miss "org.freedesktop.Notifications lo sirve '${notif_cmd:-?}'" \
+                "esperábamos swaync; otro daemon ganó el nombre de D-Bus (¿dunst/mako instalado?)"
+        fi
+    fi
+fi
+
+# Timers de usuario nd-*. Los deja stow y los habilita 08-systemd-user.sh; que el archivo
+# exista no implica que esté habilitado ni corriendo.
+UNIT_DIR="${HOME}/.config/systemd/user"
+if ! systemctl --user show-environment >/dev/null 2>&1; then
+    omit "timers nd-*" "sin systemd --user (¿bootstrap headless?)"
+else
+    shopt -s nullglob
+    timers=("${UNIT_DIR}"/nd-*.timer)
+    shopt -u nullglob
+    if ((${#timers[@]} == 0)); then
+        omit "timers nd-*" "no hay ninguno en ${UNIT_DIR}"
+    else
+        for t in "${timers[@]}"; do
+            name="$(basename "${t}")"
+            if [[ "$(systemctl --user is-active "${name}" 2>/dev/null)" == "active" ]]; then
+                pass "${name} activo"
+            else
+                miss "${name} NO está activo" \
+                    "lo habilita setup/08-systemd-user.sh; su tarea no se está ejecutando"
+            fi
+        done
+    fi
+fi
+
+# Symlinks rotos apuntando al repo. Los deja un rename/borrado de un dotfile: 04-stow.sh
+# los limpia al correr, así que si aparecen acá es que el stow quedó desfasado del repo.
+broken=()
+for pkg in .bashrc.d .config .local; do
+    [[ -d "${HOME}/${pkg}" ]] || continue
+    while IFS= read -r link; do
+        [[ "$(readlink -m "${link}")" == "${DOTFILES_DIR}/"* ]] && broken+=("${link}")
+    done < <(find "${HOME}/${pkg}" -xtype l 2>/dev/null)
+done
+if ((${#broken[@]} == 0)); then
+    pass "sin symlinks rotos hacia el repo"
+else
+    miss "${#broken[@]} symlink(s) roto(s): ${broken[0]}${broken[1]+ ...}" \
+        "el stow quedó desfasado del repo; re-correr setup/04-stow.sh los limpia"
+fi
+
+echo
 if ((fail > 0)); then
-    printf '%s%d suposición(es) rotas%s, %d ok. Revisar README (sección "apoyarse en el Spin").\n' \
-        "${C_BAD}" "${fail}" "${C_OFF}" "${ok}"
+    printf '%s%d suposición(es) rotas%s, %d ok%s. Revisar el README.\n' \
+        "${C_BAD}" "${fail}" "${C_OFF}" "${ok}" \
+        "$( ((skip > 0)) && printf ', %d salteadas' "${skip}")"
     exit 1
 fi
-printf '%sTodo en orden%s (%d/%d). El baseline del Spin es el esperado.\n' "${C_OK}" "${C_OFF}" "${ok}" "${ok}"
+printf '%sTodo en orden%s (%d/%d%s). El baseline del Spin y el entorno son los esperados.\n' \
+    "${C_OK}" "${C_OFF}" "${ok}" "${ok}" \
+    "$( ((skip > 0)) && printf ', %d salteadas' "${skip}")"

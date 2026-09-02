@@ -3,12 +3,14 @@
 set -euo pipefail
 
 echo "Creando estructura de directorios de desarrollo..."
+# Solo el árbol de Go: GOPATH exige esa estructura (la exporta .bashrc.d/04-extra.sh),
+# así que el script tiene que crearla. Node y Python no tienen equivalente — sus
+# proyectos viven donde uno los clone — y los ~/dev/{node,python} que creábamos antes
+# quedaron vacíos meses. Los proyectos van sueltos en ~/dev.
 DEV_DIRS=(
     "$HOME/dev/go/src"
     "$HOME/dev/go/bin"
     "$HOME/dev/go/pkg"
-    "$HOME/dev/node"
-    "$HOME/dev/python"
 )
 for dir in "${DEV_DIRS[@]}"; do
     mkdir -p "$dir"

@@ -11,20 +11,32 @@ STOW_DIR="${DOTFILES_DIR}"
 # específicos de la máquina o duplicados vengan de vars.sh (única fuente de
 # verdad) en lugar de estar hardcodeados. Todo output generado está git-ignored;
 # solo el `.in` se versiona.
-resolve_hwmon() {
-    local want d name f
-    for want in k10temp coretemp; do
-        for d in /sys/class/hwmon/hwmon*; do
-            [[ -r "${d}/name" ]] || continue
-            read -r name < "${d}/name" || continue
-            if [[ "${name}" == "${want}" ]]; then
-                f=$(find "${d}" -maxdepth 1 -name 'temp*_input' 2>/dev/null | sort | head -n1)
-                [[ -n "${f}" ]] && { echo "${f}"; return 0; }
-            fi
+# Emite TODOS los inputs de temperatura del sistema como lista JSON de strings, con los
+# sensores de CPU (k10temp/coretemp) primero. waybar acepta `hwmon-path` como array y usa
+# el PRIMERO que exista, así que emitir todos los candidatos vuelve la config inmune a que
+# el kernel reasigne los índices hwmonN entre reboots (antes resolvíamos una sola ruta acá
+# y un reordenamiento hacía leer mal la temperatura hasta re-correr este script).
+# Sale vacío si la máquina no expone ningún sensor; el caller borra la línea en ese caso.
+resolve_hwmon_paths() {
+    local d name f
+    local -a paths=() rest=()
+    for d in /sys/class/hwmon/hwmon*; do
+        [[ -r "${d}/name" ]] || continue
+        read -r name < "${d}/name" || continue
+        for f in "${d}"/temp*_input; do
+            [[ -r "${f}" ]] || continue
+            case "${name}" in
+                k10temp|coretemp) paths+=("${f}") ;;
+                *)                rest+=("${f}") ;;
+            esac
         done
     done
-    # Fallback: primer input de temperatura disponible en el sistema.
-    find /sys/class/hwmon/ -maxdepth 2 -name 'temp*_input' 2>/dev/null | sort | head -n1
+    paths+=("${rest[@]}")
+    ((${#paths[@]})) || return 0
+    # -> "ruta1", "ruta2"
+    printf '"%s"' "${paths[0]}"
+    local i
+    for ((i = 1; i < ${#paths[@]}; i++)); do printf ', "%s"' "${paths[i]}"; done
 }
 
 # render TEMPLATE OUTPUT 'sed-expr' ['sed-expr' ...]
@@ -43,15 +55,21 @@ render() {
 
 CONFIG_DIR="${STOW_DIR}/.config"
 
-# waybar: timezone desde vars.sh; ruta del sensor de temperatura resuelta por NOMBRE de
-# sensor (k10temp/coretemp) en tiempo de stow. Ojo: el resultado sigue siendo una ruta
-# hwmonN, y el kernel puede reasignar ese índice entre reboots — si la temperatura lee
-# mal tras un arranque, re-correr 04-stow.sh la vuelve a resolver.
-HWMON_PATH="$(resolve_hwmon)"
-echo "Rendering waybar config (timezone=${TIMEZONE}, hwmon=${HWMON_PATH:-none})"
+# waybar: timezone desde vars.sh; sensores de temperatura emitidos como ARRAY de todos
+# los candidatos (CPU primero). waybar usa el primero que exista en runtime, así que un
+# reordenamiento de los índices hwmonN por parte del kernel ya no rompe la lectura.
+HWMON_PATHS="$(resolve_hwmon_paths)"
+if [[ -n "${HWMON_PATHS}" ]]; then
+    hwmon_expr="s|@HWMON_PATHS_LINE@|\"hwmon-path\": [${HWMON_PATHS}],|"
+else
+    # Sin sensores: borrar la línea entera en vez de emitir un array vacío. waybar cae
+    # entonces a su default (/sys/class/thermal), y el JSON sigue siendo válido.
+    hwmon_expr="/@HWMON_PATHS_LINE@/d"
+fi
+echo "Rendering waybar config (timezone=${TIMEZONE}, hwmon=[${HWMON_PATHS:-none}])"
 render "${CONFIG_DIR}/waybar/config.jsonc.in" "${CONFIG_DIR}/waybar/config.jsonc" \
     "s|@TIMEZONE@|${TIMEZONE}|g" \
-    "s|@HWMON_PATH@|${HWMON_PATH}|g"
+    "${hwmon_expr}"
 
 # wlsunset (luz nocturna): geolocalización desde vars.sh.
 echo "Rendering sway night-light config (lat=${LATITUDE}, lon=${LONGITUDE})"

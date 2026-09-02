@@ -15,8 +15,11 @@ agregar lo propio, de forma declarativa y versionada.
 ## Cómo está armado (situación)
 
 - **Instalación:** `bootstraping.sh` corre los pasos `setup/NN-*.sh` en orden
-  (idempotentes). Valores por máquina en `vars.sh` (única fuente de verdad);
-  hardware (monitores, sensor de temperatura) autodetectado en runtime. La lista
+  (idempotentes). Valores por máquina en `vars.sh` (única fuente de verdad); el hardware
+  (monitores, sensores de temperatura) se autodetecta. Nota sobre el sensor de temperatura
+  de waybar: `04-stow.sh` emite **todos** los `temp*_input` del sistema como array (CPU
+  primero) y waybar usa el primero que exista, así un reordenamiento de los índices
+  `hwmonN` por parte del kernel entre reboots ya no rompe la lectura. La lista
   autoritativa de paquetes dnf vive en `setup/packages.txt` (lo de abajo es un resumen
   conceptual del stack, no el manifiesto).
 - **Dotfiles:** GNU **stow** `--no-folding` symlinkea `dotfiles/{.bashrc.d,.config,.local}`
@@ -58,6 +61,12 @@ agregar lo propio, de forma declarativa y versionada.
   futura los renombra/elimina las cosas fallan en silencio. Correr **`nd-doctor`** (en
   `~/.local/bin`, también al final del bootstrap) chequea que esas suposiciones sigan
   válidas tras una actualización del sistema.
+- **`nd-doctor` cubre dos bloques**, no solo el Spin: (1) los archivos del Spin de arriba
+  y (2) las suposiciones del entorno propio que también fallan calladas — que `~/.bashrc`
+  (viene de `/etc/skel`, no lo versionamos) siga cargando `~/.bashrc.d`, que el dueño del
+  bus `org.freedesktop.Notifications` sea **swaync** y no otro daemon, que los timers
+  `nd-*` estén activos, y que stow no haya dejado symlinks rotos apuntando al repo. Los
+  chequeos que necesitan sesión gráfica se **saltean** (no fallan) en bootstrap headless.
 - kanshi arranca por `exec_always` en `sway/config` (el `kanshi.service` está disabled).
 - **Multi-monitor:** los nombres de output viven en `vars.sh`
   (`OUTPUT_INTERNAL`/`OUTPUT_EXTERNAL`, única fuente de verdad); tanto `sway/config` como
@@ -99,6 +108,43 @@ agregar lo propio, de forma declarativa y versionada.
   `pulseaudio` de waybar usa la capa de compat — es lo correcto.
 - Red = NetworkManager (`nmcli`, script `nd-fixed-ip`).
 
+### Memoria
+Esta laptop tiene **4 GB** (3.5 GB útiles) y el OOM killer del kernel ya mató Chromium
+entero al menos una vez. Dos frentes, ambos declarativos:
+
+- **`systemd-oomd` habilitado** (`setup/11-memory.sh`), con los umbrales del paquete
+  `systemd-oomd-defaults` (declarado en `packages.txt` — **sin ese paquete el daemon
+  corre pero no vigila nada**). Por qué preferirlo al OOM killer del kernel: el del
+  kernel actúa recién cuando no queda una página libre, o sea después de un buen rato de
+  thrashing, y elige la víctima por un heurístico ciego de `oom_score` — mata el proceso
+  más grande, que es el navegador completo. `systemd-oomd` mira la **presión** de memoria
+  (PSI) y actúa antes, **por cgroup**: como cada pestaña de Chromium es su propio cgroup
+  bajo la sesión, mata la pestaña, no el navegador. Solo toca lo que cuelga de
+  `user@.service`; nunca servicios del sistema.
+- **Peso muerto fuera:** `rsyslog` deshabilitado (duplicaba en `/var/log/messages` lo que
+  journald ya guarda estructurado) — deshabilitado, no desinstalado, para poder volver
+  con un `systemctl enable`. Y `dunst` / `abrt` / `low-memory-monitor` desinstalados vía
+  `remove-packages.txt` (ver "Apps que NO queremos").
+- **zram ya viene del Spin** (3.5 GB, lzo-rle) y está bien como está: no lo tocamos.
+
+### Actualizaciones
+- **Se descargan solas, se instalan a mano.** `setup/12-auto-updates.sh` habilita
+  `dnf5-automatic.timer` (paquete `dnf5-plugin-automatic`): baja los updates en background
+  para que el `dnf upgrade` de siempre corra casi instantáneo, pero **no instala nada** —
+  el sistema no cambia a espaldas nuestras.
+- **No forkeamos ningún config**: los defaults del paquete
+  (`/usr/share/dnf5/dnf5-plugins/automatic.conf`) ya son exactamente los que queremos
+  (`download_updates=yes`, `apply_updates=no`, `emit_via=stdio`), así que el script solo
+  habilita el timer. Lo que sí hace es **verificar esas dos claves** y abortar si
+  `apply_updates` dejara de ser `no`: un cambio de default río arriba convertiría esto en
+  auto-instalación silenciosa. Para overridear algo va `/etc/dnf/automatic.conf`, no el
+  archivo de `/usr/share`.
+- **Sin notificación de escritorio, a propósito:** no queremos un aviso más; alcanza con
+  que la descarga esté hecha para cuando uno decida actualizar. El resultado queda en el
+  journal (`journalctl -u dnf5-automatic`).
+- El timer corre 06:00 con hasta 1 h de retraso aleatorio y `Persistent=true`, así que en
+  una laptop apagada a esa hora el chequeo se recupera en el próximo arranque.
+
 ### Tareas croneadas (systemd user)
 - Las tareas personales recurrentes corren como **systemd *user* units**, no atadas al
   arranque de la shell. Las units viven versionadas en `dotfiles/.config/systemd/user/` y
@@ -112,7 +158,7 @@ agregar lo propio, de forma declarativa y versionada.
   saltea sin romper si corre sin user manager (bootstrap headless).
 - **`nd-public-ip`**: chequea la IP pública al iniciar sesión y cada hora
   (`nd-public-ip.timer` → `.service` → `nd-public-ip check`). Si cambió, avisa por
-  **notificación de escritorio** (`notify-send`/dunst); ya no muestra alerta en la
+  **notificación de escritorio** (`notify-send` → swaync); ya no muestra alerta en la
   terminal. Aceptar la IP nueva con `nd-public-ip update`. El alias `myip` sigue usando
   `nd-public-ip show`.
 
@@ -146,6 +192,10 @@ agregar lo propio, de forma declarativa y versionada.
   nvim / LSPs / toolchains del host). Comparte la config del submódulo nvim. Como no hay
   paquete que lo actualice, re-correr el bootstrap re-baja el binario cuando el release
   más nuevo (API de GitHub) difiere del instalado.
+- **Zed NO se re-chequea en el bootstrap** (a diferencia de Neovide): `03-apps.sh` solo lo
+  instala si falta. No es un olvido — Zed trae **auto-update propio** y se actualiza solo,
+  así que un chequeo nuestro contra la API sería redundante. Neovide necesita el suyo
+  justamente porque el binario de release no se auto-actualiza.
 - El comando `neovide` en PATH es un **wrapper** (`dotfiles/.local/bin/neovide`): Neovide
   necesita **OpenGL >= 3.2** y en GPUs viejas (este Aspire 5742 tiene Intel Ironlake, tope
   GL 2.1) el contexto GL falla (`EGL_BAD_MATCH`). El wrapper detecta la versión de GL con
@@ -186,3 +236,31 @@ agregar lo propio, de forma declarativa y versionada.
 ### Apps que NO queremos
 - Se borran de forma declarativa: la lista vive en `setup/remove-packages.txt`, borrado
   idempotente por `setup/07-remove-unwanted.sh` (cableado en `bootstraping.sh`).
+- Además de las apps sueltas, la lista saca tres cosas que venían del Spin y **pesaban
+  sin dar nada** en una máquina de 4 GB (ver "Memoria"): **`dunst`** (competía con swaync
+  por el nombre de D-Bus `org.freedesktop.Notifications` — el journal lo registraba en
+  cada arranque), el stack **`abrt`** (4 daemons de reporte de crashes, uno de ellos
+  vigilando un log de Xorg que en Wayland no existe) y **`low-memory-monitor`** (su
+  función la cubre systemd-oomd). Basta listar `abrt`: dnf arrastra addons, GUI y
+  `libreport` como dependencias.
+
+### Decisiones deliberadas (lo que NO hacemos, y por qué)
+Cosas que un review razonable marcaría como "huecos" y que están así **a propósito**.
+Anotadas para no volver a discutirlas cada vez.
+
+- **Sin backup ni snapshots**, aunque el disco sea btrfs sobre LUKS (el escenario ideal
+  para snapper). El motivo: **la máquina es reemplazable y este repo la reconstruye**. No
+  se guardan datos personales ni sensibles en las PCs con este setup — son de uso y
+  trabajo, y lo que importa vive en repos git remotos. Agregar snapper/restic sería
+  proteger un estado que deliberadamente no tiene valor único.
+- **Llave SSH sin passphrase** y `GIT_SSH_COMMAND` exportado en `.bashrc.d/01-ps1.sh` en
+  vez de un `~/.ssh/config`. Es una decisión de comodidad tomada a conciencia: LUKS cubre
+  el disco apagado, y el riesgo residual (laptop robada con la sesión abierta) se acepta.
+  No re-proponer passphrase + agente sin que haya cambiado esa premisa.
+- **Sin contenedores** (podman/docker) instalados: no hacen falta hoy y en 4 GB de RAM no
+  salen gratis.
+- **Sin `dnf autoremove` en el bootstrap.** La limpieza de huérfanos se hace **a mano y
+  una vez** cuando corresponde (p. ej. tras subir de versión de Fedora, que suele dejar
+  cosas como `f43-backgrounds-base` colgadas). No va en un paso automático porque
+  `autoremove` resuelve contra el estado del momento y no es auditable por adelantado:
+  lo que se quiere borrar siempre se declara explícito en `remove-packages.txt`.

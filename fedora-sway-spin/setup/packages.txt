@@ -8,6 +8,15 @@
 #   - c-development      -> 06-development.sh (grupo de dnf)
 
 # Desktop / Wayland / Sway
+# El compositor y las piezas que nuestras configs nombran explícitamente. Las trae el
+# Spin, pero se declaran acá con el mismo criterio que waybar/rofi/portales: si la config
+# lo asume por nombre, el manifiesto lo declara, para que un rebuild minimal sea fiel.
+#   sway    -> el compositor mismo (la sesión entera)
+#   foot    -> `set $term foot` en sway/config
+#   swaybg  -> `output * bg ...` en sway/config
+sway
+foot
+swaybg
 SwayNotificationCenter
 swappy
 brightnessctl
@@ -25,6 +34,10 @@ slurp
 wf-recorder
 libva-utils
 playerctl
+# tuned-ppd: expone org.freedesktop.UPower.PowerProfiles sobre tuned (en Fedora reemplaza
+# a power-profiles-daemon, que NO está instalado). Es el backend del módulo
+# `power-profiles-daemon` de waybar/config.jsonc: sin esto, ese módulo queda mudo.
+tuned-ppd
 pavucontrol
 blueman
 wl-clipboard
@@ -121,6 +134,15 @@ nodejs24
 nodejs24-npm
 uv
 python3-pip
+
+# Sistema
+# systemd-oomd-defaults: los umbrales de presión de memoria (PSI) que hacen útil a
+# systemd-oomd. Sin este paquete el daemon corre pero no vigila nada. Lo habilita
+# 11-memory.sh. Ver README (sección "Memoria") para el porqué en esta máquina de 4 GB.
+systemd-oomd-defaults
+# dnf5-plugin-automatic: aporta dnf5-automatic.timer, que descarga los updates en
+# background (sin instalarlos). Lo configura y habilita 12-auto-updates.sh.
+dnf5-plugin-automatic
 
 # Automatización
 ansible

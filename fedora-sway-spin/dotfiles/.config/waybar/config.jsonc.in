@@ -92,7 +92,7 @@
     },
     "temperature": {
         "critical-threshold": 80,
-        "hwmon-path": "@HWMON_PATH@",
+        @HWMON_PATHS_LINE@
         "format": "{temperatureC}°C {icon}",
         "format-icons": [""]
     },

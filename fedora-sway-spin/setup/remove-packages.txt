@@ -13,3 +13,22 @@ eog
 # direnv: estuvo en packages.txt pero nunca se hookeó en bashrc.d (eval "$(direnv hook
 # bash)"), así que no hacía nada. Sacado del set; se desinstala para no dejar peso muerto.
 direnv
+
+# dunst: daemon de notificaciones de dunst. Nuestro daemon es SwayNotificationCenter
+# (lo arranca sway/config), pero dunst quedaba instalado y registrando el mismo nombre
+# de D-Bus: el journal repetía en cada arranque
+#   Ignoring duplicate name 'org.freedesktop.Notifications' ... org.knopwob.dunst.service
+# swaync ganaba la carrera por lanzarse explícito, pero era una condición latente.
+# Nada lo requiere.
+dunst
+
+# abrt: reporte automático de crashes de Fedora. Deja 4 daemons corriendo (abrtd,
+# abrt-oops, abrt-journal-core y abrt-xorg — este último vigila un log de Xorg que en una
+# sesión Wayland pura no existe). No lo usamos y en una máquina de 4 GB no se justifica.
+# Basta con quitar 'abrt': dnf arrastra los addons, la GUI y libreport como dependencias.
+abrt
+
+# low-memory-monitor: avisador de presión de memoria de GNOME, sin usar acá (nada lo
+# requiere y no hay GNOME Shell). Su función la cubre systemd-oomd, que sí habilitamos
+# en 11-memory.sh.
+low-memory-monitor
