@@ -32,3 +32,37 @@ abrt
 # requiere y no hay GNOME Shell). Su función la cubre systemd-oomd, que sí habilitamos
 # en 11-memory.sh.
 low-memory-monitor
+
+# --- Agentes de invitado de VM ---
+# Esta máquina es bare metal (`systemd-detect-virt` dice "none"): es un Acer Aspire 5742.
+# El live image del Spin trae igual los agentes de invitado de los tres hipervisores, con
+# sus units habilitadas (vboxservice.service, vmtoolsd.service) y sus autostarts colgando
+# de graphical-session.target (app-vboxclient@, app-vmware-user@). Se auto-detectan y
+# quedan inactive, así que no cuestan RAM — pero son paquetes y units que nadie declaró.
+# Si alguna vez este setup corre DENTRO de una VM, sacarlos de esta lista y reinstalarlos.
+virtualbox-guest-additions
+open-vm-tools
+spice-vdagent
+
+# --- Stack del instalador (Anaconda) ---
+# Anaconda es el instalador de Fedora: sirve mientras corrés el live ISO y no hace nada
+# en un sistema ya instalado. Quedó de la instalación original junto con dracut-live (el
+# módulo de dracut que arma el initramfs del live) y el autostart app-liveinst-setup@.
+# Listar anaconda-core arrastra como dependientes a anaconda-live/-tui/-webui y a
+# kdump-anaconda-addon. libreport-anaconda va aparte porque es DEPENDENCIA de
+# anaconda-core, no dependiente: sin nombrarlo quedaría huérfano.
+# Nota: se lleva puesto también `slitherer` (el jueguito de la víbora del Spin), que
+# depende de anaconda-webui. Es esperado, no un daño colateral sorpresa.
+anaconda-core
+libreport-anaconda
+dracut-live
+
+# --- Cockpit ---
+# Consola de administración web. No la usamos (cockpit.socket ya está disabled, así que
+# hoy no cuesta runtime) y entró acá solo arrastrada por anaconda-webui. Al sacar el
+# instalador, quedaría instalada sin nadie que la pida.
+cockpit-ws
+cockpit-ws-selinux
+cockpit-bridge
+cockpit-storaged
+cockpit-networkmanager

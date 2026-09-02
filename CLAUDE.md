@@ -25,16 +25,23 @@ no re-chequear:
 - **No se puede sacar Qt 100%** del Spin → lo cubrimos como baseline con qt6ct dark.
 - `$lock_timeout`/`$screen_timeout` los consume el `90-swayidle.conf` del Spin (no son
   variables muertas). **waybar lo arranca el `90-bar.conf` del Spin.**
-- **Notificaciones = swaync** (dunst desinstalado: competía por el nombre de D-Bus).
+- **Notificaciones = swaync**, y lo arranca **`swaync.service`** (habilitado por
+  `08-systemd-user.sh`), NO un `exec` de `sway/config`: el `exec_always` competía con la
+  activación por D-Bus de la propia unit y la dejaba en `failed`. dunst desinstalado por
+  el mismo motivo (nombre de D-Bus). **No re-agregar un `exec swaync`.**
 - **Power profiles = `tuned-ppd`**, no `power-profiles-daemon` (que no está instalado);
   es quien expone `org.freedesktop.UPower.PowerProfiles` para el módulo de waybar.
 - **RAM = 4 GB.** `systemd-oomd` habilitado (`11-memory.sh`) + `systemd-oomd-defaults`;
-  `rsyslog` deshabilitado; `abrt`/`dunst`/`low-memory-monitor` desinstalados.
+  `rsyslog` deshabilitado; `abrt`/`dunst`/`low-memory-monitor` desinstalados. El mismo
+  paso afina los `vm.*` para zram en `/etc/sysctl.d/90-nd-zram.conf` (`swappiness=180`,
+  `page-cluster=0`, `watermark_boost_factor=0`): los defaults del kernel asumen swap en
+  disco.
 - **Updates: se descargan solos, se instalan a mano** (`dnf5-automatic.timer` vía
   `12-auto-updates.sh`). Los defaults del paquete ya son download-only: no forkeamos config.
 - **`nd-doctor` chequea dos bloques:** archivos del Spin + suposiciones propias
   (`~/.bashrc` carga `~/.bashrc.d`, dueño del bus de notificaciones, timers `nd-*`,
-  symlinks rotos). Saltea (no falla) lo que necesita sesión gráfica.
+  **units de usuario en `failed`**, symlinks rotos). Saltea (no falla) lo que necesita
+  sesión gráfica.
 
 ## Reglas
 - **Fuentes: solo JetBrainsMono Nerd Font** en toda la UI (detalle en el README).
@@ -45,7 +52,12 @@ no re-chequear:
   `mimeapps.list`: es archivo real que el sistema reescribe).
 - PWAs vía `chromium --app=` (no Electron): Spotify, ChatGPT, WhatsApp, Gmail
   (array `WEBAPPS` en `05-webapps.sh`; sacar uno borra su lanzador en la próxima corrida).
-- Apps no deseadas → `setup/remove-packages.txt` + `setup/07-remove-unwanted.sh`.
+- Apps no deseadas → `setup/remove-packages.txt` + `setup/07-remove-unwanted.sh`, que usa
+  **`dnf remove --no-autoremove`**: sin ese flag dnf5 hace un autoremove implícito de
+  dependencias (medido: 75 paquetes / 379 MB en vez de 17 / 37 MB, llevándose `openssl`,
+  `flatpak` y `accountsservice`). **No sacar el flag.** Además de las apps sueltas, la
+  lista saca los agentes de invitado de VM (esto es bare metal), el stack del instalador
+  Anaconda y cockpit.
 - **Decisiones deliberadas — NO re-proponer** (detalle en el README, sección "Decisiones
   deliberadas"): sin backup/snapshots (la máquina es reemplazable y este repo la
   reconstruye; no se guardan datos sensibles), llave SSH sin passphrase a conciencia, sin

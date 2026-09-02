@@ -26,7 +26,17 @@ set $window rofi -show window
 # (si no, cada reload levantaría un daemon duplicado).
 # wlsunset (night light) vive en el generado config.d/10-wlsunset.conf para que sus
 # coordenadas vengan de vars.sh (LATITUDE/LONGITUDE) en vez de estar hardcodeadas.
-exec_always pkill -x swaync;         exec swaync
+#
+# swaync NO va acá a propósito: lo arranca su propia unit de usuario, que habilita
+# setup/08-systemd-user.sh. El paquete trae swaync.service con Type=dbus y
+# BusName=org.freedesktop.Notifications, más archivos de activación por D-Bus. Con el
+# `exec_always pkill -x swaync; exec swaync` que había acá, cada reload de sway soltaba
+# el nombre del bus; si una notificación llegaba en esa ventana, D-Bus activaba la unit
+# y esa instancia chocaba con la que sway acababa de lanzar:
+#     swaync[...]: An instance of SwayNotificationCenter is already running!
+#     swaync.service: Start request repeated too quickly.  -> failed
+# Es la misma pelea por el nombre de D-Bus que ya nos había dado dunst (ver README), solo
+# que swaync contra sí mismo. Dejarle el daemon a systemd deja un único dueño posible.
 exec_always pkill -x kanshi;         exec kanshi          # perfiles de output (~/.config/kanshi/config)
 exec_always pkill -x swayosd-server; exec swayosd-server  # OSD de volumen/brillo/caps (ver binds en config.d)
 

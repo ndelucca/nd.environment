@@ -15,8 +15,8 @@ set -euo pipefail
 # 2. Suposiciones del entorno propio. Piezas que tampoco controlamos del todo y fallan
 #    igual de calladas: que ~/.bashrc (viene de /etc/skel, no lo versionamos) siga
 #    cargando ~/.bashrc.d, que sea swaync y no otro daemon el dueño del bus de
-#    notificaciones, que los timers nd-* estén corriendo, y que el stow no haya dejado
-#    symlinks rotos tras un rename.
+#    notificaciones, que los timers nd-* estén corriendo, que no haya units de usuario
+#    en failed, y que el stow no haya dejado symlinks rotos tras un rename.
 #
 # Este chequeo materializa esas suposiciones para detectar la deriva de un vistazo.
 # No arregla nada: reporta. Correr tras actualizar el sistema / subir de versión.
@@ -139,6 +139,27 @@ else
                     "lo habilita setup/08-systemd-user.sh; su tarea no se está ejecutando"
             fi
         done
+    fi
+fi
+
+# Units de usuario en failed. Complementa (no reemplaza) al chequeo del bus de arriba:
+# ese pregunta "¿quién es dueño del nombre?" y puede dar OK mientras una unit del mismo
+# daemon quedó caída. Fue exactamente el punto ciego que dejó pasar el race de swaync
+# (sway lo lanzaba con exec_always y D-Bus activaba además swaync.service; la segunda
+# instancia moría y systemd la dejaba en failed, con el bus igual servido por la primera).
+# Una unit en failed no se recupera sola: solo se ve si alguien la mira.
+if ! systemctl --user show-environment >/dev/null 2>&1; then
+    omit "units de usuario en failed" "sin systemd --user (¿bootstrap headless?)"
+else
+    mapfile -t failed_units < <(
+        systemctl --user list-units --state=failed --no-legend --plain 2>/dev/null \
+            | awk '{print $1}'
+    )
+    if ((${#failed_units[@]} == 0)); then
+        pass "sin units de usuario en failed"
+    else
+        miss "${#failed_units[@]} unit(s) de usuario en failed: ${failed_units[*]}" \
+            "ver 'systemctl --user status <unit>'; una unit caída no se reintenta sola"
     fi
 fi
 

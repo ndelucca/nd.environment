@@ -49,6 +49,16 @@ agregar lo propio, de forma declarativa y versionada.
   muertas.
 - **waybar lo arranca el Spin** vía `swaybar_command waybar` en su `90-bar.conf`. Por
   eso no hay `exec waybar` en nuestra config, y está bien.
+- **swaync lo arranca systemd, no sway** (`swaync.service`, habilitado por
+  `08-systemd-user.sh`). Antes iba con `exec_always pkill -x swaync; exec swaync` en
+  `sway/config` y eso creaba un race: el paquete trae la unit con `Type=dbus` +
+  `BusName=org.freedesktop.Notifications` **y** archivos de activación por D-Bus, así que
+  cada `reload` de sway soltaba el nombre del bus y una notificación que llegara en esa
+  ventana activaba la unit, chocando con la instancia recién lanzada por sway
+  (`An instance of SwayNotificationCenter is already running!` → exit 1 → `failed`). Es la
+  misma pelea por el nombre de D-Bus que ya había dado dunst, pero swaync contra sí mismo.
+  Con la unit hay un único dueño posible, y de yapa `systemctl --user reload swaync`
+  recarga config y CSS. **No volver a poner un `exec` de swaync en `sway/config`.**
 - **Teclas de medios vs. volumen/brillo (no confundir):** las *de medios*
   (play/pause/next/prev → `playerctl`) **las provee el Spin tal cual**
   (`/usr/share/sway/config.d/60-bindings-media.conf`) y **NO** las override-amos: no hay
@@ -65,7 +75,10 @@ agregar lo propio, de forma declarativa y versionada.
   y (2) las suposiciones del entorno propio que también fallan calladas — que `~/.bashrc`
   (viene de `/etc/skel`, no lo versionamos) siga cargando `~/.bashrc.d`, que el dueño del
   bus `org.freedesktop.Notifications` sea **swaync** y no otro daemon, que los timers
-  `nd-*` estén activos, y que stow no haya dejado symlinks rotos apuntando al repo. Los
+  `nd-*` estén activos, que **no haya units de usuario en `failed`**, y que stow no haya
+  dejado symlinks rotos apuntando al repo. El chequeo de units caídas se sumó justamente
+  porque el del bus de notificaciones tenía un punto ciego: preguntaba *quién es dueño del
+  nombre* y daba OK mientras `swaync.service` estaba en `failed` al lado. Los
   chequeos que necesitan sesión gráfica se **saltean** (no fallan) en bootstrap headless.
 - kanshi arranca por `exec_always` en `sway/config` (el `kanshi.service` está disabled).
 - **Multi-monitor:** los nombres de output viven en `vars.sh`
@@ -126,6 +139,13 @@ entero al menos una vez. Dos frentes, ambos declarativos:
   con un `systemctl enable`. Y `dunst` / `abrt` / `low-memory-monitor` desinstalados vía
   `remove-packages.txt` (ver "Apps que NO queremos").
 - **zram ya viene del Spin** (3.5 GB, lzo-rle) y está bien como está: no lo tocamos.
+- **Los `vm.*` del kernel sí los afinamos** (`11-memory.sh` → `/etc/sysctl.d/90-nd-zram.conf`),
+  porque sus defaults asumen swap en **disco** y acá el swap es zram (~2.5× de compresión):
+  `vm.swappiness=180` (swapear a RAM comprimida sale mucho más barato que tirar page cache
+  que después hay que releer del disco), `vm.page-cluster=0` (el default lee 8 páginas de
+  readahead por fallo apostando a amortizar un seek; zram es random-access puro, esas 7
+  páginas extra son descompresión tirada) y `vm.watermark_boost_factor=0`. Son los valores
+  que recomienda el propio zram-generator upstream.
 
 ### Actualizaciones
 - **Se descargan solas, se instalan a mano.** `setup/12-auto-updates.sh` habilita
@@ -154,6 +174,13 @@ entero al menos una vez. Dos frentes, ambos declarativos:
   `daemon-reload` + `enable --now`. **Convención:** habilita cualquier `nd-*.timer` del
   directorio. Agregar una tarea = soltar su `.service` + `.timer` con prefijo `nd-` y
   re-correr el bootstrap.
+- El mismo paso habilita además los **daemons de sesión que provee un paquete** y que
+  preferimos dejar en manos de systemd en vez de un `exec` de `sway/config` — hoy
+  `swaync.service`. Como no son units nuestras, no hay glob que las descubra: van en el
+  array `SESSION_SERVICES` del script, nombradas a mano y con su porqué. Antes de
+  habilitarlas el script mata el proceso suelto (`pkill -x`) y hace `reset-failed`: si
+  quedó una instancia viva fuera del cgroup de la unit, el `start` choca por el nombre de
+  D-Bus y la unit vuelve a `failed`.
 - No usa `loginctl enable-linger`: alcanza con la sesión gráfica activa. El paso de setup
   saltea sin romper si corre sin user manager (bootstrap headless).
 - **`nd-public-ip`**: chequea la IP pública al iniciar sesión y cada hora
@@ -243,6 +270,22 @@ entero al menos una vez. Dos frentes, ambos declarativos:
   vigilando un log de Xorg que en Wayland no existe) y **`low-memory-monitor`** (su
   función la cubre systemd-oomd). Basta listar `abrt`: dnf arrastra addons, GUI y
   `libreport` como dependencias.
+- **También sale lo que el live image dejó y no aplica a esta máquina:** los agentes de
+  invitado de VM (`virtualbox-guest-additions`, `open-vm-tools`, `spice-vdagent`) — esto es
+  bare metal, `systemd-detect-virt` dice `none`, pero venían con units habilitadas
+  (`vboxservice`, `vmtoolsd`) y autostarts colgando de `graphical-session.target` —, el
+  stack del instalador **Anaconda** (`anaconda-core` + `libreport-anaconda` + `dracut-live`,
+  que arrastra `anaconda-live/-tui/-webui`, `kdump-anaconda-addon` y el jueguito
+  `slitherer`), y **cockpit** (entró solo arrastrado por `anaconda-webui`).
+- **`07-remove-unwanted.sh` usa `dnf remove --no-autoremove`, y es importante.** Por
+  default dnf5 aplica `clean_requirements_on_remove=True`, o sea un *autoremove implícito*
+  de las dependencias que quedan sin usar — justo lo que la sección "Decisiones
+  deliberadas" dice que no queremos. No es teórico: declarando el stack de Anaconda +
+  cockpit + agentes de VM, la diferencia medida fue **75 paquetes / 379 MB sin el flag**
+  (incluyendo `openssl`, `flatpak`, `accountsservice`, `clevis-luks`, `udisks2-btrfs` y
+  `zenity`, todos en uso) contra **17 paquetes / 37 MB con el flag** — exactamente lo
+  declarado más sus dependientes, que son inevitables. Los dependientes sí vienen siempre:
+  no se puede dejar instalado algo que requiere lo que borramos.
 
 ### Decisiones deliberadas (lo que NO hacemos, y por qué)
 Cosas que un review razonable marcaría como "huecos" y que están así **a propósito**.
@@ -263,4 +306,7 @@ Anotadas para no volver a discutirlas cada vez.
   una vez** cuando corresponde (p. ej. tras subir de versión de Fedora, que suele dejar
   cosas como `f43-backgrounds-base` colgadas). No va en un paso automático porque
   `autoremove` resuelve contra el estado del momento y no es auditable por adelantado:
-  lo que se quiere borrar siempre se declara explícito en `remove-packages.txt`.
+  lo que se quiere borrar siempre se declara explícito en `remove-packages.txt`. Por eso
+  mismo `07-remove-unwanted.sh` pasa `--no-autoremove` (ver "Apps que NO queremos"): sin
+  ese flag el propio `dnf remove` hacía un autoremove implícito por la puerta de atrás,
+  que es exactamente lo que este punto quiere evitar.

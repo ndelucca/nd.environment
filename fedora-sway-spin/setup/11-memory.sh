@@ -39,6 +39,41 @@ else
     echo "  rsyslog no está instalado; nada que hacer."
 fi
 
+# --- Parámetros de VM afinados para zram (no para disco) ---
+#
+# El swap de esta máquina es zram (3.5 GB, lzo-rle, ~2.5x de compresión): swapear escribe
+# a RAM comprimida, no a un plato girando. Los defaults del kernel para vm.* asumen swap
+# en DISCO, así que sin esto el kernel prefiere tirar page cache antes que usar un swap
+# que en realidad le sale baratísimo. Los tres valores son los que recomienda el propio
+# zram-generator upstream.
+#
+# Drop-in en /etc/sysctl.d/ en vez de tocar 99-sysctl.conf: mismo criterio que el resto
+# del setup (override por archivo propio, sin forkear el del sistema).
+
+echo "Aplicando parámetros de VM afinados para zram (/etc/sysctl.d)"
+
+sudo tee /etc/sysctl.d/90-nd-zram.conf >/dev/null <<'SYSCTL'
+# Afinado para swap en zram. Ver setup/11-memory.sh y el README (sección "Memoria").
+
+# Cuánto prefiere el kernel swapear vs. reclamar page cache. El default 60 está calibrado
+# para disco. Con zram, swapear cuesta una compresión en RAM: conviene hacerlo mucho antes
+# que tirar cache que después hay que releer del disco.
+vm.swappiness = 180
+
+# Readahead de swap, en potencias de 2 páginas. El default 3 lee 8 páginas por cada fallo,
+# apostando a que un seek de disco amortiza traer vecinas. zram es random-access puro: esas
+# 7 páginas extra son descompresión y RAM tiradas. 0 = traer solo la página pedida.
+vm.page-cluster = 0
+
+# Boost del watermark de reclaim tras fragmentación. Pensado para dar aire a un disco lento;
+# con zram detrás solo genera reclaim extra innecesario.
+vm.watermark_boost_factor = 0
+SYSCTL
+
+# Aplica sin reboot. Si corre sin systemd a mano (bootstrap headless), no es fatal.
+sudo sysctl --system >/dev/null 2>&1 \
+    || echo "  (no se pudieron aplicar ahora; toman efecto al próximo arranque)"
+
 # Nota: dunst, el stack abrt y low-memory-monitor también salen por memoria/peso muerto,
 # pero eso es borrado de paquetes: vive de forma declarativa en remove-packages.txt y lo
 # aplica 07-remove-unwanted.sh. Acá solo va lo que es estado de servicios.
