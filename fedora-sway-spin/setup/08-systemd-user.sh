@@ -62,12 +62,19 @@ for svc in "${SESSION_SERVICES[@]}"; do
 
     # Si quedó una instancia suelta de una sesión previa (p. ej. del `exec` que sway hacía
     # antes), el start choca por el recurso compartido y la unit queda en failed. Matamos
-    # la suelta y limpiamos el estado failed antes de arrancar la de systemd.
-    proc="${svc%.service}"
-    if [[ -n "${NOW}" ]]; then
-        pkill -x "${proc}" 2>/dev/null || true
+    # la suelta y limpiamos el estado failed antes de arrancar la de systemd. SOLO si la
+    # unit no está activa: si lo está, el proceso vivo es el de systemd y el pkill lo
+    # mataba en cada re-corrida (SIGTERM = salida limpia, Restart=on-failure no lo levanta;
+    # swaync perdía las notificaciones pendientes). El enable de abajo es idempotente.
+    if systemctl --user is-active --quiet "${svc}"; then
+        echo "${svc} ya activo; no se reinicia"
+    else
+        proc="${svc%.service}"
+        if [[ -n "${NOW}" ]]; then
+            pkill -x "${proc}" 2>/dev/null || true
+        fi
+        systemctl --user reset-failed "${svc}" 2>/dev/null || true
     fi
-    systemctl --user reset-failed "${svc}" 2>/dev/null || true
 
     echo "Habilitando ${svc}"
     # shellcheck disable=SC2086

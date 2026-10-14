@@ -95,19 +95,22 @@ render "${CONFIG_DIR}/kanshi/config.in" "${CONFIG_DIR}/kanshi/config" \
 # un proyecto remoto), así que versionarlo directo ensuciaría el repo. Versionamos solo
 # settings.json.in y generamos el settings.json (git-ignored) a partir de él; como el
 # archivo generado es el target del symlink, las ediciones en runtime de Zed caen en la
-# copia ignorada y quedan fuera de git. El `*` de jq hace deep-merge del template POR
-# ENCIMA del archivo generado previo (gana el template), así los settings curados se
-# aplican siempre mientras que las claves que solo escribió Zed (ssh_connections, ajustes
-# de UI) sobreviven entre corridas. Ambos archivos deben ser JSON plano (sin comentarios)
-# para jq; si alguna vez el archivo generado no es JSON válido, caemos en sobrescribirlo
-# desde el template en lugar de abortar el bootstrap.
+# copia ignorada y quedan fuera de git. El generado es: del archivo previo, SOLO las claves
+# de ZED_RUNTIME_KEYS (estado que escribe Zed y queremos conservar), con el template
+# encima. Antes se mergeaba el generado entero y una clave que SACABAS del template
+# sobrevivía para siempre; ahora el template es la verdad y lo que no está ahí ni en la
+# allowlist desaparece en la próxima corrida. Ambos archivos deben ser JSON plano (sin
+# comentarios) para jq; si el generado no es JSON válido, se sobrescribe desde el template.
 ZED_DIR="${STOW_DIR}/.config/zed"
+ZED_RUNTIME_KEYS='["ssh_connections"]'
 if [[ -f "${ZED_DIR}/settings.json.in" ]]; then
-    echo "Rendering zed settings.json (jq deep-merge template over generated)"
+    echo "Rendering zed settings.json (template + runtime keys ${ZED_RUNTIME_KEYS})"
     gen="${ZED_DIR}/settings.json"
     [[ -f "${gen}" ]] || echo '{}' > "${gen}"
     tmp="$(mktemp)"
-    if jq -s '.[0] * .[1]' "${gen}" "${ZED_DIR}/settings.json.in" > "${tmp}" 2>/dev/null; then
+    if jq -s --argjson keep "${ZED_RUNTIME_KEYS}" \
+        '(.[0] | with_entries(select(.key as $k | $keep | index($k)))) * .[1]' \
+        "${gen}" "${ZED_DIR}/settings.json.in" > "${tmp}" 2>/dev/null; then
         mv "${tmp}" "${gen}"
     else
         echo "  generated settings.json was not valid JSON; overwriting from template"

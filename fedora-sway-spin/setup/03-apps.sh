@@ -80,13 +80,17 @@ fi
 # actualice, re-correr el bootstrap re-baja el binario cuando el release más nuevo
 # difiere del instalado (abajo).
 
-# (Re)instala el binario de release más reciente en ~/.local/bin/neovide-bin.
+# Instala el binario del release <tag> en ~/.local/bin/neovide-bin. Se baja por tag
+# (no por `latest`) para que lo instalado sea exactamente la versión que se comparó
+# abajo: con `latest` un release publicado entre la consulta a la API y la descarga
+# dejaba una versión distinta a la decidida. Upstream no publica checksums de sus
+# assets, así que no hay más verificación posible que el TLS de GitHub.
 # El asset es un .tar plano (no .tar.gz) con el binario neovide adentro.
 install_neovide_bin() {
-    local tmp bin
+    local tag="$1" tmp bin
     tmp="$(mktemp -d)"
     trap 'rm -rf "${tmp:-}"' RETURN
-    curl -fL https://github.com/neovide/neovide/releases/latest/download/neovide-linux-x86_64.tar \
+    curl -fL "https://github.com/neovide/neovide/releases/download/${tag}/neovide-linux-x86_64.tar" \
         -o "${tmp}/neovide.tar"
     tar -xf "${tmp}/neovide.tar" -C "${tmp}"
     bin="$(find "${tmp}" -type f -name neovide | head -n1)"
@@ -95,24 +99,26 @@ install_neovide_bin() {
     install -m755 "${bin}" "${HOME}/.local/bin/neovide-bin"
 }
 
+# Tag del release más nuevo según la API de GitHub (p. ej. "0.16.2"). `|| latest=""`
+# desacopla del `set -e`: si curl falla (red caída / rate-limit), queremos latest vacío
+# para dejar la instalada en paz, NO abortar.
+latest="$(curl -fsSL --max-time 10 https://api.github.com/repos/neovide/neovide/releases/latest 2>/dev/null \
+    | jq -r '.tag_name // empty' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)" || latest=""
+
 if command -v neovide-bin &>/dev/null; then
-    # Re-fetch solo si el release más nuevo difiere del instalado. La versión latest sale
-    # de la API de GitHub; si no se puede determinar (red caída / rate-limit), dejamos la
-    # instalada en paz en vez de re-bajar a ciegas.
+    # Re-fetch solo si el release más nuevo difiere del instalado.
     cur="$(neovide-bin --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
-    # `|| latest=""` desacopla del `set -e`: si curl falla (red caída / rate-limit de la
-    # API de GitHub), queremos latest vacío para dejar la instalada en paz, NO abortar.
-    latest="$(curl -fsSL --max-time 10 https://api.github.com/repos/neovide/neovide/releases/latest 2>/dev/null \
-        | jq -r '.tag_name // empty' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)" || latest=""
     if [[ -n "${latest}" && "${cur}" != "${latest}" ]]; then
         echo "Neovide ${cur:-?} -> ${latest}: actualizando."
-        install_neovide_bin
+        install_neovide_bin "${latest}"
     else
         echo "Neovide al día (${cur:-instalado})."
     fi
+elif [[ -n "${latest}" ]]; then
+    echo "Instalando Neovide ${latest} desde el release de GitHub..."
+    install_neovide_bin "${latest}"
 else
-    echo "Instalando Neovide desde el release de GitHub..."
-    install_neovide_bin
+    echo "AVISO: no se pudo consultar el release de Neovide (¿sin red?); se instala en la próxima corrida."
 fi
 
 # Icono + entrada .desktop. El .desktop se REGENERA siempre (no solo en la primera

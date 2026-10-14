@@ -131,6 +131,75 @@ else
     miss "${SYSCTL_FILE}" "lo escribe 11-memory.sh; sin él los vm.* vuelven a los defaults de swap en disco"
 fi
 
+# Configs generadas desde templates .in (04-stow.sh): que contengan los valores ACTUALES
+# de vars.sh y ningún @PLACEHOLDER@ sin reemplazar. Editar vars.sh y olvidarse de
+# re-correr 04-stow.sh dejaba el render viejo con el doctor en verde: chequeaba que el
+# output existiera en DRM, nunca que el config renderizado lo usara.
+# check_render <generado> <qué> <valor esperado>...
+check_render() {
+    local gen="$1" what="$2"; shift 2
+    local missing=() v
+    if [[ ! -f "${gen}" ]]; then
+        miss "${what}: ${gen} no existe" "lo genera 04-stow.sh desde el .in"
+        return
+    fi
+    if grep -qE '@[A-Z_]+@' "${gen}"; then
+        miss "${what}: quedó un @PLACEHOLDER@ sin reemplazar" "04-stow.sh no conoce esa variable; revisar el template"
+        return
+    fi
+    for v in "$@"; do grep -qF -- "${v}" "${gen}" || missing+=("${v}"); done
+    if ((${#missing[@]} == 0)); then
+        pass "${what} renderizado con los valores de vars.sh"
+    else
+        miss "${what}: falta ${missing[*]}" "vars.sh cambió y no se re-corrió 04-stow.sh (el render es viejo)"
+    fi
+}
+check_render "${DOTFILES_DIR}/.config/sway/config" "sway/config" "${OUTPUT_INTERNAL}" "${OUTPUT_EXTERNAL}"
+check_render "${DOTFILES_DIR}/.config/kanshi/config" "kanshi/config" "${OUTPUT_INTERNAL}" "${OUTPUT_EXTERNAL}" "${DOCK_LEFT_WIDTH},0"
+check_render "${DOTFILES_DIR}/.config/systemd/user/wlsunset.service" "wlsunset.service" "-l ${LATITUDE} -L ${LONGITUDE}"
+check_render "${DOTFILES_DIR}/.config/waybar/config.jsonc" "waybar/config.jsonc" "${TIMEZONE}"
+
+# SDDM: el fondo del greeter va por theme.conf.user (02-...sh), nunca pisando el
+# default.jxl del Spin. Ese nombre es un symlink (→ f44/default/f44-01-day.jxl, de
+# f44-backgrounds-base): `cp` sobre el symlink pisaba el archivo real, y rpm -V del
+# paquete del symlink no lo veía. Se verifica el archivo REAL contra su propio RPM.
+SDDM_USER_CONF=/usr/share/sddm/themes/03-sway-fedora/theme.conf.user
+if grep -qs '^background=/usr/share/backgrounds/wallpaper.png' "${SDDM_USER_CONF}"; then
+    pass "SDDM usa nuestro wallpaper vía theme.conf.user"
+else
+    miss "${SDDM_USER_CONF} no apunta a nuestro wallpaper" "lo escribe 02-fonts-wallpaper-sddm-grub.sh"
+fi
+SDDM_DEFAULT_BG="$(readlink -f /usr/share/backgrounds/default.jxl 2>/dev/null || true)"
+bg_pkg="$(rpm -qf "${SDDM_DEFAULT_BG:-/nonexistent}" 2>/dev/null || true)"
+if [[ -n "${bg_pkg}" ]]; then
+    # rpm -V sale 1 cuando hay diferencias: sin el `|| true`, pipefail anula el grep.
+    if { rpm -V "${bg_pkg}" 2>/dev/null || true; } | grep -qF "${SDDM_DEFAULT_BG}"; then
+        miss "${SDDM_DEFAULT_BG} no es el del RPM ${bg_pkg%%-[0-9]*}" \
+            "lo pisaba una versión vieja de 02-...sh; re-correrlo lo reinstala"
+    else
+        pass "fondo default del Spin intacto (${SDDM_DEFAULT_BG##*/} es el del RPM)"
+    fi
+fi
+
+# Updates: se descargan solas pero se instalan a mano (12-auto-updates.sh), y "a mano"
+# sin cadencia terminó en un mes sin instalar nada. Umbral: 14 días desde el último
+# upgrade registrado por dnf. awk lee todo el historial (sin `exit`) para no cortarle el
+# pipe a dnf5: con pipefail eso abortaba el doctor entero sin mensaje.
+UPDATE_MAX_DAYS=14
+last_up="$(dnf5 history list 2>/dev/null \
+    | awk '!found && $2=="dnf" && ($3=="update" || $3=="upgrade") {print $4; found=1}')" || last_up=""
+if [[ -z "${last_up}" ]]; then
+    omit "días desde el último dnf upgrade" "sin transacciones de upgrade en el historial de dnf"
+else
+    days=$(( ( $(date +%s) - $(date -d "${last_up}" +%s) ) / 86400 ))
+    if (( days <= UPDATE_MAX_DAYS )); then
+        pass "último dnf upgrade hace ${days} día(s) (${last_up})"
+    else
+        miss "último dnf upgrade hace ${days} días (${last_up})" \
+            "los updates ya están descargados (dnf5-automatic); corré 'sudo dnf upgrade'"
+    fi
+fi
+
 # Units de sistema que el bootstrap habilita/deshabilita.
 check_eq "systemd-oomd" "active" "$(systemctl is-active systemd-oomd 2>/dev/null)" \
     "lo habilita 11-memory.sh"

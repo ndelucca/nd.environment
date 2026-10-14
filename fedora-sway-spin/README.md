@@ -28,7 +28,13 @@ agregar lo propio, de forma declarativa y versionada.
 - **Dotfiles:** GNU **stow** `--no-folding` symlinkea `dotfiles/{.bashrc.d,.config,.local}`
   a `~`. Configs con valores variables se generan desde templates `.in`: `04-stow.sh`
   los renderiza (sed/jq) con los valores de `vars.sh` ANTES de stowear, y el resultado
-  queda git-ignorado; solo se versiona el `.in`.
+  queda git-ignorado; solo se versiona el `.in`. `nd-doctor` verifica que cada render
+  contenga los valores actuales de `vars.sh` (editar `vars.sh` sin re-correr `04-stow.sh`
+  dejaba el render viejo sin que nadie lo viera). El `settings.json` de Zed es el caso
+  especial: template encima de una **allowlist** de claves que Zed escribe en runtime
+  (`ZED_RUNTIME_KEYS` en `04-stow.sh`, hoy solo `ssh_connections`); cualquier otra clave
+  que no esté en el `.in` desaparece en la próxima corrida, así sacar un setting del
+  template realmente lo saca.
 - **Config de Sway en capas:** usamos el `include` con `layered-include` del Spin. Los
   defaults del Spin viven en `/usr/share/sway/config.d/*`; nosotros override por
   **mismo nombre de archivo** en `~/.config/sway/config.d/`. **No** forkeamos archivos
@@ -98,8 +104,11 @@ Si al tocar algo hay que editar el mismo párrafo en dos lugares, uno de los dos
   de los que dependemos sin controlarlos (waybar, swayidle, polkit, media keys, include en
   capas, `locale1-xkb-config`, `assign-cgroups`), porque si una versión futura los renombra
   todo falla en silencio; (2) **lo que `vars.sh` y el bootstrap prometen**: outputs
-  declarados existen como conectores DRM, keymaps/timezone/locale siguen como los seteó
-  `01-...`, los `vm.*` del drop-in de sysctl están aplicados, systemd-oomd y
+  declarados existen como conectores DRM, los configs renderizados desde `.in` llevan los
+  valores actuales de `vars.sh`, keymaps/timezone/locale siguen como los seteó
+  `01-...`, los `vm.*` del drop-in de sysctl están aplicados, el fondo de SDDM va por
+  `theme.conf.user` y `default.jxl` sigue siendo el del RPM, el último `dnf upgrade` no
+  tiene más de 14 días, systemd-oomd y
   `dnf5-automatic.timer` activos, rsyslog inactivo, y los `SESSION_SERVICES` `active`;
   (3) **integridad del despliegue**: `~/.bashrc` (viene de `/etc/skel`, no se versiona)
   carga `~/.bashrc.d`, el dueño de `org.freedesktop.Notifications` es swaync, timers
@@ -140,6 +149,25 @@ Si al tocar algo hay que editar el mismo párrafo en dos lugares, uno de los dos
   (`02-...sh` escribe `/etc/sddm.conf.d/ndelucca.conf` + wallpaper, no lo instala).
   Su greeter corre en **Wayland** (`sddm-wayland-sway`, `DisplayServer=wayland`). Es
   Qt pero pre-sesión: se deja como está.
+- **Wallpaper del greeter vía `theme.conf.user`** del tema del Spin
+  (`/usr/share/sddm/themes/03-sway-fedora/`): SDDM lee ese archivo al lado de
+  `theme.conf` y pisa clave por clave; es su mecanismo oficial y vale para todos los
+  usuarios. Antes copiábamos nuestro wallpaper sobre `default.jxl`, que es un **symlink**
+  al fondo real del release (`f44/default/f44-01-day.jxl`, RPM `f44-backgrounds-base`):
+  el `cp` pisaba el archivo real, cada update del paquete lo restauraba en silencio, y el
+  `.bak` que guardábamos era copia de la versión ya pisada. `02-...sh` reinstala el
+  paquete si el archivo real difiere de su RPM, y `nd-doctor` lo verifica (resolviendo
+  el symlink, no mirando el paquete del symlink). Nota: `setup/wallpaper.png` es en
+  realidad un JPEG con extensión `.png`; sway y SDDM lo cargan por contenido, así que
+  funciona, pero el nombre miente.
+- `EnableHiDPI` va bajo `[Wayland]` y `[X11]` en `sddm.conf.d`; bajo `[General]` (donde
+  estuvo) SDDM lo ignora sin avisar. Es una opción general para cualquier máquina: no
+  hace nada en un panel de baja densidad, escala el greeter en uno HiDPI.
+- **GRUB: `grub2-mkconfig` siempre a `/boot/grub2/grub.cfg`**, BIOS o UEFI. Desde Fedora
+  34 ese es el único `grub.cfg` real (`/etc/grub2-efi.cfg` apunta ahí) y el de la
+  partición EFI es un stub que lo redirige; escribir ahí lo pisa. El tema breeze se baja
+  por **commit fijo** (`THEME_COMMIT` en `02-...sh`) y sin sudo; solo la copia a `/boot`
+  es root.
 - **Agente polkit:** lo arranca el Spin (`/usr/share/sway/config.d/95-autostart-policykit-agent.conf`
   → `lxqt-policykit-agent`). Se deja (queda pintado por qt6ct).
 
@@ -168,6 +196,14 @@ entero al menos una vez. Dos frentes, ambos declarativos:
   página) y solo sobre lo que cuelga de la sesión de usuario, nunca servicios del sistema.
   Una versión anterior de este README afirmaba "cada pestaña es su propio cgroup; mata la
   pestaña, no el navegador": era falso.
+- **oomd elige entre cgroups hoja, y lo lanzado desde la terminal hereda el del pane.**
+  `assign-cgroups.py` solo mueve lo que nace en el cgroup del compositor (rofi, binds).
+  Una app lanzada desde una shell queda en el scope de ese pane de tmux
+  (`app-foot.slice/tmux-spawn-<uuid>.scope`; tmux ≥ 3.4 crea uno por pane), y como oomd
+  recorre hasta las hojas, ese scope es el candidato: cae la app **y la shell del pane**,
+  no todo tmux. Para lanzar una app gráfica desde la terminal sin ese acople está
+  `launch <cmd>` (`dotfiles/.bashrc.d/06-launch.sh`): `systemd-run --user` en una unit
+  `app-<cmd>-<n>` bajo `app.slice`, como si viniera de rofi.
 - **Peso muerto fuera:** `rsyslog` deshabilitado (duplicaba en `/var/log/messages` lo que
   journald ya guarda estructurado) — deshabilitado, no desinstalado, para poder volver
   con un `systemctl enable`. Y `dunst` / `abrt` / `low-memory-monitor` desinstalados vía
@@ -199,6 +235,10 @@ entero al menos una vez. Dos frentes, ambos declarativos:
 - **Sin notificación de escritorio, a propósito:** no queremos un aviso más; alcanza con
   que la descarga esté hecha para cuando uno decida actualizar. El resultado queda en el
   journal (`journalctl -u dnf5-automatic`).
+- **Cadencia: 14 días como máximo**, y la vigila `nd-doctor` (días desde la última
+  transacción `dnf update/upgrade` del historial). "A mano" sin umbral terminó en un mes
+  entero sin instalar nada (2026-09-13 → 2026-10-13). Es el único recordatorio: no hay
+  timer ni notificación, a propósito.
 - El timer corre 06:00 con hasta 1 h de retraso aleatorio y `Persistent=true`, así que en
   una laptop apagada a esa hora el chequeo se recupera en el próximo arranque.
 
@@ -212,9 +252,10 @@ entero al menos una vez. Dos frentes, ambos declarativos:
   directorio. Agregar una tarea = soltar su `.service` + `.timer` con prefijo `nd-` y
   re-correr el bootstrap.
 - El mismo paso habilita los **daemons de sesión** (`SESSION_SERVICES` en `vars.sh`; ver
-  "Daemons de sesión" arriba). Antes de arrancar cada uno mata la instancia suelta que pueda
-  haber quedado (`pkill -x`) y hace `reset-failed`, porque una instancia viva fuera del
-  cgroup de la unit hace fallar el `start`. Si no hay `graphical-session.target` activo
+  "Daemons de sesión" arriba). Si la unit ya está activa no la toca (re-correr el
+  bootstrap no reinicia daemons sanos). Si no, antes de arrancarla mata la instancia
+  suelta que pueda haber quedado (`pkill -x`) y hace `reset-failed`, porque una instancia
+  viva fuera del cgroup de la unit hace fallar el `start`. Si no hay `graphical-session.target` activo
   (bootstrap por TTY/ssh), solo hace `enable`, sin `--now`: las units tienen
   `ExecCondition` sobre `WAYLAND_DISPLAY` y arrancan en el próximo login gráfico.
 - No usa `loginctl enable-linger`: alcanza con la sesión gráfica activa. El paso de setup
@@ -254,7 +295,12 @@ entero al menos una vez. Dos frentes, ambos declarativos:
   (en `03-apps.sh`), NO por flatpak (el flatpak corre nvim en sandbox y no usaría el
   nvim / LSPs / toolchains del host). Comparte la config del submódulo nvim. Como no hay
   paquete que lo actualice, re-correr el bootstrap re-baja el binario cuando el release
-  más nuevo (API de GitHub) difiere del instalado.
+  más nuevo (API de GitHub) difiere del instalado; se baja por tag, no por `latest`, así
+  lo instalado es exactamente la versión comparada. Upstream no publica checksums.
+- **"Reproducible" acá significa misma forma, no mismo estado:** Zed se auto-actualiza,
+  Neovide sigue al último release y los COPR avanzan. Dos bootstraps dan la misma
+  configuración con versiones distintas de esas tres cosas, a sabiendas. Lo que se puede
+  fijar sin crear una tarea de mantenimiento (el tema de GRUB) está fijado por commit.
 - **Zed NO se re-chequea en el bootstrap** (a diferencia de Neovide): `03-apps.sh` solo lo
   instala si falta. No es un olvido — Zed trae **auto-update propio** y se actualiza solo,
   así que un chequeo nuestro contra la API sería redundante. Neovide necesita el suyo
