@@ -1,0 +1,16 @@
+# Luz nocturna. GENERADO desde wlsunset.service.in por setup/04-stow.sh: las coordenadas
+# vienen de vars.sh (LATITUDE/LONGITUDE). El .service generado está git-ignored; editá
+# el template .in. Lo habilita 08-systemd-user.sh (SESSION_SERVICES en vars.sh).
+[Unit]
+Description=Night light (wlsunset)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecCondition=/bin/sh -c '[ -n "$WAYLAND_DISPLAY" ]'
+ExecStart=/usr/bin/wlsunset -l @LATITUDE@ -L @LONGITUDE@
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

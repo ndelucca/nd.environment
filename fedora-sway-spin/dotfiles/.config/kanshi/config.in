@@ -1,5 +1,5 @@
 # kanshi — perfiles de output declarativos, aplicados automáticamente al hotplug/dock.
-# Se arranca desde sway/config (`exec_always ... kanshi`), junto a swaync/wlsunset.
+# Lo arranca kanshi.service (systemd --user; SESSION_SERVICES en vars.sh), no sway.
 #
 # GENERADO desde config.in por setup/04-stow.sh — @DOCK_LEFT_WIDTH@ y los nombres de
 # output (@OUTPUT_INTERNAL@/@OUTPUT_EXTERNAL@) vienen de vars.sh (única fuente de verdad,
@@ -21,7 +21,7 @@ profile docked {
     output @OUTPUT_INTERNAL@ enable position @DOCK_LEFT_WIDTH@,0
 }
 
-# Solo monitor externo: el eDP físicamente ausente (no por tapa cerrada — al cerrar la
+# Solo monitor externo: el panel interno físicamente ausente (no por tapa cerrada — al cerrar la
 # tapa el output sigue conectado, solo lo desactiva sway, y kanshi seguiría en `docked`).
 profile external {
     output @OUTPUT_EXTERNAL@ enable position 0,0

@@ -2,23 +2,11 @@
 
 set -euo pipefail
 
-# Descarga anticipada de updates (NO instalación automática).
-#
-# Decisión: los updates se DESCARGAN en background y se instalan a mano. Así el
-# `dnf upgrade` de siempre corre casi instantáneo (los paquetes ya están en caché) sin
-# que el sistema cambie por su cuenta a espaldas nuestras. No hay notificación de
-# escritorio a propósito: no queremos un aviso más, solo que la descarga esté hecha.
-#
-# El paquete dnf5-plugin-automatic (declarado en packages.txt) ya trae exactamente esos
-# defaults en /usr/share/dnf5/dnf5-plugins/automatic.conf:
-#     download_updates = yes   apply_updates = no   emit_via = stdio
-# así que NO forkeamos ningún config — mismo criterio que con el resto del sistema: si el
-# default ya es el que queremos, solo habilitamos el timer. Lo que sí hacemos es
-# VERIFICAR esas dos claves, porque si una versión futura del paquete cambiara el default
-# a apply_updates=yes el sistema empezaría a auto-instalar en silencio.
-#
-# El timer corre a las 06:00 con hasta 1 h de retraso aleatorio y Persistent=true, así que
-# en una laptop apagada a esa hora el chequeo se recupera en el próximo arranque.
+# Updates: se DESCARGAN en background, se instalan a mano (README, "Actualizaciones").
+# Los defaults del paquete dnf5-plugin-automatic ya son download_updates=yes /
+# apply_updates=no, así que no forkeamos config: solo habilitamos el timer y VERIFICAMOS
+# esas dos claves, porque si un default futuro pasara a apply_updates=yes el sistema
+# empezaría a auto-instalar en silencio. Override, si hiciera falta: /etc/dnf/automatic.conf.
 
 DEFAULTS_CONF="/usr/share/dnf5/dnf5-plugins/automatic.conf"
 OVERRIDE_CONF="/etc/dnf/automatic.conf"

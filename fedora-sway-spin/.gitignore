@@ -10,13 +10,9 @@ dotfiles/.config/zed/settings.json
 # Only the .in template is tracked.
 dotfiles/.config/sway/config
 
-# Generated from 10-wlsunset.conf.in by setup/04-stow.sh (geolocation from
+# Generated from wlsunset.service.in by setup/04-stow.sh (geolocation from
 # vars.sh). Only the .in template is tracked.
-dotfiles/.config/sway/config.d/10-wlsunset.conf
-
-# Generated from 10-keyboard.conf.in by setup/04-stow.sh (keyboard layout/variant
-# from vars.sh). Only the .in template is tracked.
-dotfiles/.config/sway/config.d/10-keyboard.conf
+dotfiles/.config/systemd/user/wlsunset.service
 
 # Generated from config.in by setup/04-stow.sh (docked-profile offset from
 # vars.sh). Only the .in template is tracked.

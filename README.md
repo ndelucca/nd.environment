@@ -31,9 +31,11 @@ git -C "${HOME}/nd.environment" pull --recurse-submodules
 
 Then update Neovim plugins from inside nvim: `:lua vim.pack.update()`.
 
-Machine-specific values (timezone, git identity) live once in
-`fedora-sway-spin/vars.sh`. Hardware (monitor layout, temperature sensor) is
-auto-detected at runtime, so nothing there needs editing per machine.
+Machine-specific values (timezone, git identity, keyboard, output names) live once
+in `fedora-sway-spin/vars.sh`; on a new machine check the output names against
+`swaymsg -t get_outputs`. The temperature sensor is auto-detected. `nd-doctor`
+(run at the end of the bootstrap) verifies that what `vars.sh` declares matches
+the machine.
 
 ### SSH (manual, per machine)
 
@@ -45,4 +47,5 @@ ssh-keygen -t ed25519 -C "ndelucca@protonmail.com"
 cat ~/.ssh/id_ed25519.pub   # add this to GitHub → Settings → SSH keys
 ```
 
-`GIT_SSH_COMMAND` (in `.bashrc.d/01-ps1.sh`) already points to `~/.ssh/id_ed25519`.
+`~/.ssh/id_ed25519` is one of the identities ssh tries by default, so no extra
+git or ssh config is needed.

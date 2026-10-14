@@ -80,8 +80,6 @@ RUTA="${C_RUTA}\w${M_END}"
 FIRSTLINE="${C_RUTA}>\n${M_END}"
 SIMB="${C_SIMB}☯${M_END}"
 
-export GIT_SSH_COMMAND="ssh -i ${HOME}/.ssh/id_ed25519"
-
 # Recortar automáticamente rutas largas en el prompt.
 # export PROMPT_DIRTRIM=2
 

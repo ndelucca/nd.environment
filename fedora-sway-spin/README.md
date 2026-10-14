@@ -15,9 +15,12 @@ agregar lo propio, de forma declarativa y versionada.
 ## Cómo está armado (situación)
 
 - **Instalación:** `bootstraping.sh` corre los pasos `setup/NN-*.sh` en orden
-  (idempotentes). Valores por máquina en `vars.sh` (única fuente de verdad); el hardware
-  (monitores, sensores de temperatura) se autodetecta. Nota sobre el sensor de temperatura
-  de waybar: `04-stow.sh` emite **todos** los `temp*_input` del sistema como array (CPU
+  (idempotentes). Valores por máquina en `vars.sh` (única fuente de verdad: timezone,
+  teclado, coordenadas, **nombres de output**, identidad git, lista de daemons de sesión).
+  Los outputs **no** se autodetectan; `nd-doctor` verifica que los declarados existan como
+  conectores DRM, porque un nombre equivocado (pasó: `eDP-1` en una laptop que expone
+  `LVDS-1`) deja a kanshi sin perfil y al lid switch sin efecto, sin ningún error. Lo único
+  que sí se autodetecta es el sensor de temperatura de waybar: `04-stow.sh` emite **todos** los `temp*_input` del sistema como array (CPU
   primero) y waybar usa el primero que exista, así un reordenamiento de los índices
   `hwmonN` por parte del kernel entre reboots ya no rompe la lectura. La lista
   autoritativa de paquetes dnf vive en `setup/packages.txt` (lo de abajo es un resumen
@@ -35,6 +38,18 @@ agregar lo propio, de forma declarativa y versionada.
   `git submodule update --init --recursive`; si clonaste sin `--recurse-submodules`,
   ese paso lo trae igual.
 
+## Dónde vive cada cosa (documentación)
+
+Un hecho se escribe **una vez**, acá. Los otros lugares apuntan a esta sección, no la
+repiten:
+- **Este README** = intención, situación, decisiones y su porqué. Fuente de verdad.
+- **`CLAUDE.md` (raíz)** = solo reglas de comportamiento para el agente (qué no
+  re-proponer, qué flags no sacar, convenciones de commits) + "leé el README".
+- **Comentarios en scripts/configs** = qué hace esa línea y el porqué corto, con un
+  "ver README, sección X" si el porqué es largo. No ensayos.
+- **`vars.sh`** = valores. Los comentarios ahí dicen quién consume cada valor.
+Si al tocar algo hay que editar el mismo párrafo en dos lugares, uno de los dos sobra.
+
 ## Reglas / decisiones (lo que conviene recordar)
 
 ### Wayland / compositor
@@ -49,16 +64,28 @@ agregar lo propio, de forma declarativa y versionada.
   muertas.
 - **waybar lo arranca el Spin** vía `swaybar_command waybar` en su `90-bar.conf`. Por
   eso no hay `exec waybar` en nuestra config, y está bien.
-- **swaync lo arranca systemd, no sway** (`swaync.service`, habilitado por
-  `08-systemd-user.sh`). Antes iba con `exec_always pkill -x swaync; exec swaync` en
-  `sway/config` y eso creaba un race: el paquete trae la unit con `Type=dbus` +
-  `BusName=org.freedesktop.Notifications` **y** archivos de activación por D-Bus, así que
-  cada `reload` de sway soltaba el nombre del bus y una notificación que llegara en esa
-  ventana activaba la unit, chocando con la instancia recién lanzada por sway
-  (`An instance of SwayNotificationCenter is already running!` → exit 1 → `failed`). Es la
-  misma pelea por el nombre de D-Bus que ya había dado dunst, pero swaync contra sí mismo.
-  Con la unit hay un único dueño posible, y de yapa `systemctl --user reload swaync`
-  recarga config y CSS. **No volver a poner un `exec` de swaync en `sway/config`.**
+- **Daemons de sesión = systemd user units, no `exec` de sway.** kanshi, wlsunset,
+  swayosd-server y swaync los arranca `systemd --user` (lista `SESSION_SERVICES` en
+  `vars.sh`, habilitada por `08-systemd-user.sh`; kanshi y swaync traen su unit en el
+  paquete, `wlsunset.service.in` y `swayosd-server.service` son nuestras). Motivo: el
+  patrón `exec_always pkill -x X; exec X` que había antes tenía dos fallas. (1) Race en
+  cada `reload`: la instancia nueva arrancaba mientras la vieja todavía soltaba su recurso
+  (nombre de D-Bus en swaync y swayosd, gamma control en wlsunset) y una de las dos moría;
+  en swaync además chocaba con la activación por D-Bus de su propia unit (`An instance of
+  SwayNotificationCenter is already running!` → `failed`). (2) Sin supervisión: el
+  2026-10-13 kanshi, wlsunset y swayosd-server llevaban horas muertos sin log ni aviso, y
+  `nd-doctor` daba 10/10. Con systemd hay un único dueño posible de cada recurso,
+  `Restart=on-failure`, `PartOf=graphical-session.target`, y el doctor pregunta
+  `is-active`. El propio Spin lo recomienda (`/etc/sway/config.d/10-systemd-cgroups.conf`).
+  **No volver a poner un `exec` de estos daemons en `sway/config`.** Los watchers de
+  cliphist (`wl-paste --watch`) sí quedan como `exec` simple: no tienen recurso exclusivo.
+- **Layout de teclado: una sola cadena.** `vars.sh` → `01-locale-datetime-keyboard.sh`
+  (`localectl --no-convert set-keymap` / `set-x11-keymap`) → `org.freedesktop.locale1` →
+  `sway/config.in` ejecuta el script del Spin `locale1-xkb-config --oneshot` en cada
+  arranque/reload. No hay archivo de teclado nuestro ni en `~/.config` ni en `/usr/share`
+  (una versión vieja escribía `/usr/share/sway/config.d/10-keyboard.conf` a mano; `01-...`
+  lo retira si lo encuentra y `nd-doctor` acusa cualquier archivo sin dueño RPM ahí). El
+  `--no-convert` importa: sin él, `set-x11-keymap eu` borraba el keymap de consola.
 - **Teclas de medios vs. volumen/brillo (no confundir):** las *de medios*
   (play/pause/next/prev → `playerctl`) **las provee el Spin tal cual**
   (`/usr/share/sway/config.d/60-bindings-media.conf`) y **NO** las override-amos: no hay
@@ -66,26 +93,26 @@ agregar lo propio, de forma declarativa y versionada.
   override-amos por mismo nombre de archivo para enrutarlas por **swayosd** (OSD en
   pantalla). Si las media keys dejaran de andar, es deriva del Spin → lo chequea
   `nd-doctor`.
-- **Deriva del Spin:** como varios daemons (waybar, swayidle, agente polkit) y el
-  `include` en capas dependen de archivos del Spin que NO controlamos, si una versión
-  futura los renombra/elimina las cosas fallan en silencio. Correr **`nd-doctor`** (en
-  `~/.local/bin`, también al final del bootstrap) chequea que esas suposiciones sigan
-  válidas tras una actualización del sistema.
-- **`nd-doctor` cubre dos bloques**, no solo el Spin: (1) los archivos del Spin de arriba
-  y (2) las suposiciones del entorno propio que también fallan calladas — que `~/.bashrc`
-  (viene de `/etc/skel`, no lo versionamos) siga cargando `~/.bashrc.d`, que el dueño del
-  bus `org.freedesktop.Notifications` sea **swaync** y no otro daemon, que los timers
-  `nd-*` estén activos, que **no haya units de usuario en `failed`**, y que stow no haya
-  dejado symlinks rotos apuntando al repo. El chequeo de units caídas se sumó justamente
-  porque el del bus de notificaciones tenía un punto ciego: preguntaba *quién es dueño del
-  nombre* y daba OK mientras `swaync.service` estaba en `failed` al lado. Los
-  chequeos que necesitan sesión gráfica se **saltean** (no fallan) en bootstrap headless.
-- kanshi arranca por `exec_always` en `sway/config` (el `kanshi.service` está disabled).
+- **`nd-doctor`** (en `~/.local/bin`, también al final del bootstrap) chequea tres
+  bloques y **salta** (no falla) lo que necesita sesión gráfica: (1) **archivos del Spin**
+  de los que dependemos sin controlarlos (waybar, swayidle, polkit, media keys, include en
+  capas, `locale1-xkb-config`, `assign-cgroups`), porque si una versión futura los renombra
+  todo falla en silencio; (2) **lo que `vars.sh` y el bootstrap prometen**: outputs
+  declarados existen como conectores DRM, keymaps/timezone/locale siguen como los seteó
+  `01-...`, los `vm.*` del drop-in de sysctl están aplicados, systemd-oomd y
+  `dnf5-automatic.timer` activos, rsyslog inactivo, y los `SESSION_SERVICES` `active`;
+  (3) **integridad del despliegue**: `~/.bashrc` (viene de `/etc/skel`, no se versiona)
+  carga `~/.bashrc.d`, el dueño de `org.freedesktop.Notifications` es swaync, timers
+  `nd-*` activos, ninguna unit de usuario en `failed`, sin symlinks rotos hacia el repo y
+  sin archivos sin dueño RPM en `/usr/share/sway/config.d`. El bloque (2) se agregó
+  después de que el doctor diera "todo en orden" con tres daemons muertos y un nombre de
+  output inexistente: chequeaba al Spin, nunca al propio setup.
 - **Multi-monitor:** los nombres de output viven en `vars.sh`
   (`OUTPUT_INTERNAL`/`OUTPUT_EXTERNAL`, única fuente de verdad); tanto `sway/config` como
-  `kanshi/config` se generan desde ahí. Si cambiás de monitor o de puerto, corré
-  `swaymsg -t get_outputs` para ver los nombres reales y actualizá esos dos valores en
-  `vars.sh` (más `DOCK_LEFT_WIDTH`), luego re-corré `04-stow.sh`.
+  `kanshi/config` se generan desde ahí. En esta laptop (Acer Aspire 5742, i915) el panel es
+  **`LVDS-1`**, no `eDP-1`. Si cambiás de máquina, monitor o puerto, corré
+  `swaymsg -t get_outputs` (o `ls /sys/class/drm`) y actualizá esos dos valores (más
+  `DOCK_LEFT_WIDTH`), luego re-corré `04-stow.sh`. `nd-doctor` acusa un nombre inexistente.
 
 ### Toolkit y theming
 - Familia **GTK / Adwaita-dark** en todo (GTK3 + GTK4 coordinados, cursor Adwaita 24
@@ -126,14 +153,21 @@ Esta laptop tiene **4 GB** (3.5 GB útiles) y el OOM killer del kernel ya mató 
 entero al menos una vez. Dos frentes, ambos declarativos:
 
 - **`systemd-oomd` habilitado** (`setup/11-memory.sh`), con los umbrales del paquete
-  `systemd-oomd-defaults` (declarado en `packages.txt` — **sin ese paquete el daemon
-  corre pero no vigila nada**). Por qué preferirlo al OOM killer del kernel: el del
-  kernel actúa recién cuando no queda una página libre, o sea después de un buen rato de
-  thrashing, y elige la víctima por un heurístico ciego de `oom_score` — mata el proceso
-  más grande, que es el navegador completo. `systemd-oomd` mira la **presión** de memoria
-  (PSI) y actúa antes, **por cgroup**: como cada pestaña de Chromium es su propio cgroup
-  bajo la sesión, mata la pestaña, no el navegador. Solo toca lo que cuelga de
-  `user@.service`; nunca servicios del sistema.
+  `systemd-oomd-defaults` (declarado en `packages.txt`; **sin ese paquete el daemon corre
+  pero no vigila nada**). Qué hace **de verdad** en este Spin, medido con `oomctl`: vigila
+  la **presión** de memoria (PSI) de `user@1000.service/app.slice` (y de `system.slice`) y,
+  pasado el umbral por 20 s, mata el **cgroup** hijo que más reclama; el chequeo por uso de
+  swap está sin cgroups monitoreados, así que no actúa. La granularidad es **la app, no
+  la pestaña**: `assign-cgroups.py` del Spin mueve a su propio scope solo el PID principal
+  de cada ventana nueva, y el zygote de Chromium con todos sus renderers queda en
+  `session-N.scope`, el mismo cgroup que sway, que oomd **no** monitorea. O sea: si la
+  presión viene de las pestañas, oomd no la ve y actúa el OOM killer del kernel (que mata
+  el proceso más grande, normalmente un renderer: una pestaña); si oomd actúa sobre
+  `app.slice`, el candidato es el scope de Chromium y muere el navegador entero. La
+  ventaja real sobre el kernel es que actúa **antes** (por PSI, no cuando no queda una
+  página) y solo sobre lo que cuelga de la sesión de usuario, nunca servicios del sistema.
+  Una versión anterior de este README afirmaba "cada pestaña es su propio cgroup; mata la
+  pestaña, no el navegador": era falso.
 - **Peso muerto fuera:** `rsyslog` deshabilitado (duplicaba en `/var/log/messages` lo que
   journald ya guarda estructurado) — deshabilitado, no desinstalado, para poder volver
   con un `systemctl enable`. Y `dunst` / `abrt` / `low-memory-monitor` desinstalados vía
@@ -145,7 +179,10 @@ entero al menos una vez. Dos frentes, ambos declarativos:
   que después hay que releer del disco), `vm.page-cluster=0` (el default lee 8 páginas de
   readahead por fallo apostando a amortizar un seek; zram es random-access puro, esas 7
   páginas extra son descompresión tirada) y `vm.watermark_boost_factor=0`. Son los valores
-  que recomienda el propio zram-generator upstream.
+  que recomienda el propio zram-generator upstream, **no medidos acá**: en uso normal hay
+  ~1.5 GB en zram comprimidos a ~0.7 GB. Si alguna vez se afina, hacerlo con datos
+  (`zramctl`, `/proc/pressure/memory`), no por intuición. `nd-doctor` verifica que los
+  valores del drop-in sean los que corren.
 
 ### Actualizaciones
 - **Se descargan solas, se instalan a mano.** `setup/12-auto-updates.sh` habilita
@@ -174,13 +211,12 @@ entero al menos una vez. Dos frentes, ambos declarativos:
   `daemon-reload` + `enable --now`. **Convención:** habilita cualquier `nd-*.timer` del
   directorio. Agregar una tarea = soltar su `.service` + `.timer` con prefijo `nd-` y
   re-correr el bootstrap.
-- El mismo paso habilita además los **daemons de sesión que provee un paquete** y que
-  preferimos dejar en manos de systemd en vez de un `exec` de `sway/config` — hoy
-  `swaync.service`. Como no son units nuestras, no hay glob que las descubra: van en el
-  array `SESSION_SERVICES` del script, nombradas a mano y con su porqué. Antes de
-  habilitarlas el script mata el proceso suelto (`pkill -x`) y hace `reset-failed`: si
-  quedó una instancia viva fuera del cgroup de la unit, el `start` choca por el nombre de
-  D-Bus y la unit vuelve a `failed`.
+- El mismo paso habilita los **daemons de sesión** (`SESSION_SERVICES` en `vars.sh`; ver
+  "Daemons de sesión" arriba). Antes de arrancar cada uno mata la instancia suelta que pueda
+  haber quedado (`pkill -x`) y hace `reset-failed`, porque una instancia viva fuera del
+  cgroup de la unit hace fallar el `start`. Si no hay `graphical-session.target` activo
+  (bootstrap por TTY/ssh), solo hace `enable`, sin `--now`: las units tienen
+  `ExecCondition` sobre `WAYLAND_DISPLAY` y arrancan en el próximo login gráfico.
 - No usa `loginctl enable-linger`: alcanza con la sesión gráfica activa. El paso de setup
   saltea sin romper si corre sin user manager (bootstrap headless).
 - **`nd-public-ip`**: chequea la IP pública al iniciar sesión y cada hora
@@ -296,10 +332,11 @@ Anotadas para no volver a discutirlas cada vez.
   se guardan datos personales ni sensibles en las PCs con este setup — son de uso y
   trabajo, y lo que importa vive en repos git remotos. Agregar snapper/restic sería
   proteger un estado que deliberadamente no tiene valor único.
-- **Llave SSH sin passphrase** y `GIT_SSH_COMMAND` exportado en `.bashrc.d/01-ps1.sh` en
-  vez de un `~/.ssh/config`. Es una decisión de comodidad tomada a conciencia: LUKS cubre
-  el disco apagado, y el riesgo residual (laptop robada con la sesión abierta) se acepta.
-  No re-proponer passphrase + agente sin que haya cambiado esa premisa.
+- **Llave SSH sin passphrase**, `~/.ssh/id_ed25519`, sin `~/.ssh/config` ni
+  `GIT_SSH_COMMAND` (ssh ya prueba ese archivo por defecto; el `GIT_SSH_COMMAND` que había
+  no agregaba nada). Es una decisión de comodidad tomada a conciencia: LUKS cubre el disco
+  apagado, y el riesgo residual (laptop robada con la sesión abierta) se acepta. No
+  re-proponer passphrase + agente sin que haya cambiado esa premisa.
 - **Sin contenedores** (podman/docker) instalados: no hacen falta hoy y en 4 GB de RAM no
   salen gratis.
 - **Sin `dnf autoremove` en el bootstrap.** La limpieza de huérfanos se hace **a mano y

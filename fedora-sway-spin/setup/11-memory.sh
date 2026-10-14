@@ -2,21 +2,11 @@
 
 set -euo pipefail
 
-# Presión de memoria: esta laptop tiene 4 GB (3.5 GB útiles) y el OOM killer del kernel
-# ya mató Chromium entero al menos una vez. Este paso ajusta cómo responde el sistema
-# cuando la memoria escasea, y saca de encima daemons que no usamos.
-#
-# systemd-oomd vs. el OOM killer del kernel (por qué preferimos el primero):
-#   - El del kernel actúa recién cuando NO queda una página libre. Para entonces el
-#     sistema lleva rato en thrashing, y elige la víctima por un heurístico ciego de
-#     oom_score: mata el proceso "más grande", o sea el navegador completo.
-#   - systemd-oomd vigila la PRESIÓN de memoria (PSI: cuánto tiempo real están los
-#     procesos frenados esperando RAM) y actúa antes, por cgroup. Como cada pestaña de
-#     Chromium es su propio cgroup bajo la sesión, mata la pestaña en vez del navegador.
-#     Solo actúa sobre lo que cuelga de user@.service; nunca sobre servicios del sistema.
-#
-# Los umbrales los aporta el paquete systemd-oomd-defaults (declarado en packages.txt):
-# sin él el daemon corre pero no vigila nada. Por eso este paso solo habilita.
+# Presión de memoria en una laptop de 4 GB. Dos cosas: habilitar systemd-oomd (actúa por
+# PSI, antes que el OOM killer del kernel, y solo sobre cgroups de la sesión de usuario;
+# qué cubre y qué NO en este Spin está medido en README, "Memoria") y afinar los vm.* para
+# zram. Los umbrales de oomd los trae systemd-oomd-defaults (packages.txt): sin ese
+# paquete el daemon corre pero no vigila nada, por eso este paso solo habilita.
 
 echo "Habilitando systemd-oomd (respuesta a presión de memoria por cgroup)"
 if ! rpm -q systemd-oomd-defaults &>/dev/null; then
@@ -40,15 +30,9 @@ else
 fi
 
 # --- Parámetros de VM afinados para zram (no para disco) ---
-#
-# El swap de esta máquina es zram (3.5 GB, lzo-rle, ~2.5x de compresión): swapear escribe
-# a RAM comprimida, no a un plato girando. Los defaults del kernel para vm.* asumen swap
-# en DISCO, así que sin esto el kernel prefiere tirar page cache antes que usar un swap
-# que en realidad le sale baratísimo. Los tres valores son los que recomienda el propio
-# zram-generator upstream.
-#
-# Drop-in en /etc/sysctl.d/ en vez de tocar 99-sysctl.conf: mismo criterio que el resto
-# del setup (override por archivo propio, sin forkear el del sistema).
+# El swap es zram: los defaults del kernel asumen disco. Valores recomendados por
+# zram-generator upstream, no medidos acá (README, "Memoria"). Drop-in propio en
+# /etc/sysctl.d, sin tocar el del sistema. nd-doctor verifica que estén aplicados.
 
 echo "Aplicando parámetros de VM afinados para zram (/etc/sysctl.d)"
 

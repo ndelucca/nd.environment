@@ -2,41 +2,36 @@
 
 set -euo pipefail
 
-# Habilita las units de usuario del entorno: los timers de las tareas croneadas y los
-# daemons de sesión que preferimos dejar en manos de systemd.
-#
-# Las units propias viven versionadas en dotfiles/.config/systemd/user/ y las symlinkea
-# stow junto con el resto de .config (04-stow.sh). stow deja los archivos, pero
-# habilitarlos (crear los symlinks en timers.target.wants/ o graphical-session.target.wants/)
-# es trabajo de systemctl, así que va acá, después del stow.
-#
-# Dos convenciones distintas:
-#   - TIMERS: se habilita cualquier `nd-*.timer` que aparezca en el directorio. Agregar
-#     una tarea = soltar su .service + .timer con prefijo `nd-` y re-correr el bootstrap.
-#   - DAEMONS: lista explícita más abajo. Son units que trae un PAQUETE (no nuestras), así
-#     que no hay glob que las descubra: van nombradas a mano, con su porqué.
+# shellcheck source=../vars.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../vars.sh"   # provee SESSION_SERVICES
+
+# Habilita las units de usuario del entorno. Dos convenciones (detalle en el README,
+# sección "Tareas croneadas" y "Daemons de sesión"):
+#   - TIMERS: cualquier `nd-*.timer` que haya en el directorio (units nuestras, stoweadas).
+#   - DAEMONS DE SESIÓN: la lista SESSION_SERVICES de vars.sh (kanshi, wlsunset,
+#     swayosd-server, swaync). Van por systemd y no por `exec` de sway/config para que haya
+#     un único dueño de cada recurso y Restart=on-failure si se caen. La misma lista la
+#     verifica nd-doctor.
+# stow deja los archivos; habilitarlos (symlinks en *.target.wants/) es trabajo de
+# systemctl, así que va acá, después del stow.
 
 UNIT_DIR="${HOME}/.config/systemd/user"
 
-# Daemons de sesión que arranca systemd en vez de un `exec` de sway/config.
-#
-# swaync: el paquete trae swaync.service con Type=dbus, BusName=org.freedesktop.Notifications
-# y archivos de activación por D-Bus. Mientras sway lo lanzaba con
-# `exec_always pkill -x swaync; exec swaync`, cada reload soltaba el nombre del bus y una
-# notificación que llegara en esa ventana activaba la unit por D-Bus, chocando con la
-# instancia recién lanzada por sway ("An instance of SwayNotificationCenter is already
-# running!" -> exit 1 -> failed). Dejándoselo a systemd hay un único dueño posible del
-# nombre. La unit es WantedBy=graphical-session.target, así que arranca con la sesión.
-SESSION_SERVICES=(
-    "swaync.service"
-)
-
-# Guard: sin sesión de usuario (p. ej. bootstrap headless) no hay user manager
-# al que hablarle. Avisar y salir 0 para no romper el bootstrap; las units
-# quedan listas para la próxima corrida dentro de una sesión gráfica.
+# Guard: sin user manager (bootstrap por ssh/TTY sin login de systemd) no hay a quién
+# hablarle. Avisar y salir 0; las units quedan listas para la próxima corrida.
 if ! systemctl --user show-environment >/dev/null 2>&1; then
     echo "systemd --user no disponible (¿sin sesión de usuario?); salteando enable de units."
     exit 0
+fi
+
+# Las units de sesión tienen PartOf/WantedBy=graphical-session.target y ExecCondition
+# sobre WAYLAND_DISPLAY: fuera de una sesión gráfica solo las habilitamos (sin --now), si
+# no el start falla y la unit queda en failed hasta el próximo login.
+if [[ "$(systemctl --user is-active graphical-session.target 2>/dev/null)" == "active" ]]; then
+    NOW="--now"
+else
+    NOW=""
+    echo "Sin sesión gráfica activa: se habilitan las units sin arrancarlas (arrancan al próximo login)."
 fi
 
 systemctl --user daemon-reload
@@ -49,33 +44,32 @@ shopt -u nullglob
 if ((${#timers[@]} == 0)); then
     echo "No hay timers nd-*.timer en ${UNIT_DIR}. Nada que habilitar."
 else
-    # enable --now es idempotente: re-habilitar/re-arrancar un timer ya activo es
-    # inofensivo, así reaplicar el bootstrap en una máquina configurada no molesta.
+    # enable --now es idempotente: re-habilitar/re-arrancar un timer ya activo es inofensivo.
     for timer in "${timers[@]}"; do
         name="$(basename "${timer}")"
         echo "Habilitando ${name}"
-        systemctl --user enable --now "${name}"
+        # shellcheck disable=SC2086  # NOW vacío = sin flag, a propósito
+        systemctl --user enable ${NOW} "${name}"
     done
 fi
 
-# --- Daemons de sesión provistos por paquetes ---
+# --- Daemons de sesión ---
 for svc in "${SESSION_SERVICES[@]}"; do
     if ! systemctl --user cat "${svc}" >/dev/null 2>&1; then
-        echo "AVISO: ${svc} no existe (¿paquete no instalado?); salteando."
+        echo "AVISO: ${svc} no existe (¿paquete no instalado / stow no corrido?); salteando."
         continue
     fi
 
-    # El daemon puede estar corriendo suelto de una sesión previa (p. ej. el `exec swaync`
-    # que sway hacía antes de este cambio). Si queda vivo fuera del cgroup de la unit, el
-    # start choca por el nombre de D-Bus y la unit vuelve a quedar en failed. Lo matamos
-    # antes para que systemd arranque el suyo limpio.
+    # Si quedó una instancia suelta de una sesión previa (p. ej. del `exec` que sway hacía
+    # antes), el start choca por el recurso compartido y la unit queda en failed. Matamos
+    # la suelta y limpiamos el estado failed antes de arrancar la de systemd.
     proc="${svc%.service}"
-    pkill -x "${proc}" 2>/dev/null || true
-
-    # Una unit que quedó en failed de un arranque anterior no se recupera sola: sin este
-    # reset-failed el enable --now no la reintenta.
+    if [[ -n "${NOW}" ]]; then
+        pkill -x "${proc}" 2>/dev/null || true
+    fi
     systemctl --user reset-failed "${svc}" 2>/dev/null || true
 
     echo "Habilitando ${svc}"
-    systemctl --user enable --now "${svc}"
+    # shellcheck disable=SC2086
+    systemctl --user enable ${NOW} "${svc}"
 done

@@ -15,7 +15,7 @@ eog
 direnv
 
 # dunst: daemon de notificaciones de dunst. Nuestro daemon es SwayNotificationCenter
-# (lo arranca sway/config), pero dunst quedaba instalado y registrando el mismo nombre
+# (lo arranca systemd --user), pero dunst quedaba instalado y registrando el mismo nombre
 # de D-Bus: el journal repetía en cada arranque
 #   Ignoring duplicate name 'org.freedesktop.Notifications' ... org.knopwob.dunst.service
 # swaync ganaba la carrera por lanzarse explícito, pero era una condición latente.

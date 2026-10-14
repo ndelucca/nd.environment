@@ -1,42 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 #
-# nd-doctor — chequea las suposiciones frágiles de este setup.
+# nd-doctor — chequea las suposiciones frágiles de este setup. No arregla nada: reporta.
+# Correr tras actualizar el sistema, subir de versión o re-correr el bootstrap.
 #
-# Dos bloques, por dos motivos distintos:
+# Tres bloques (el porqué largo está en el README, sección "nd-doctor"):
+#   1. Archivos del Spin de los que dependemos sin controlarlos (daemons que arranca el
+#      Spin, include en capas). Si una versión futura los renombra, falla en silencio.
+#   2. Lo que el setup PROMETE sobre la máquina: que vars.sh describa este hardware
+#      (outputs), que lo que seteó el bootstrap siga seteado (keymaps, timezone, locale,
+#      sysctl, units de sistema) y que los daemons de sesión que lanzamos estén vivos.
+#      Antes el doctor solo miraba el Spin y daba 10/10 con kanshi muerto y eDP-1 en una
+#      laptop con LVDS-1.
+#   3. Integridad del propio despliegue: ~/.bashrc carga ~/.bashrc.d, dueño del bus de
+#      notificaciones, timers nd-*, units en failed, symlinks rotos, archivos nuestros
+#      huérfanos en /usr/share.
 #
-# 1. Archivos del Spin. La estrategia del entorno es "apoyarse en el Spin": varios
-#    servicios NO los arrancamos nosotros, los arranca el Spin desde sus
-#    /usr/share/sway/config.d/*.conf, y nuestros overrides ganan por mismo nombre de
-#    archivo. Si una versión futura del Spin renombra o elimina esos archivos, las cosas
-#    dejan de funcionar EN SILENCIO (la barra no aparece, el idle no bloquea, el override
-#    no aplica) sin ningún error.
-#
-# 2. Suposiciones del entorno propio. Piezas que tampoco controlamos del todo y fallan
-#    igual de calladas: que ~/.bashrc (viene de /etc/skel, no lo versionamos) siga
-#    cargando ~/.bashrc.d, que sea swaync y no otro daemon el dueño del bus de
-#    notificaciones, que los timers nd-* estén corriendo, que no haya units de usuario
-#    en failed, y que el stow no haya dejado symlinks rotos tras un rename.
-#
-# Este chequeo materializa esas suposiciones para detectar la deriva de un vistazo.
-# No arregla nada: reporta. Correr tras actualizar el sistema / subir de versión.
-#
-# Los chequeos que necesitan una sesión gráfica (bus de notificaciones, timers de
-# usuario) se SALTEAN, no fallan, cuando no hay sesión — el bootstrap puede correr
-# headless y eso no es un problema del setup.
+# Lo que necesita sesión gráfica se SALTEA (no falla) en bootstrap headless.
 
 ok=0
 fail=0
 skip=0
 
-# Directorio de dotfiles del repo, derivado de la ubicación REAL de este script
-# (~/.local/bin/nd-doctor es un symlink a dotfiles/.local/bin/nd-doctor): subiendo tres
-# niveles se llega a dotfiles/. Se usa para detectar symlinks que apuntan al repo.
+# ~/.local/bin/nd-doctor es symlink a fedora-sway-spin/dotfiles/.local/bin/nd-doctor:
+# tres niveles arriba de su directorio real está fedora-sway-spin/, donde vive vars.sh
+# (SSOT de outputs, keymaps, SESSION_SERVICES...). vars.sh define DOTFILES_DIR.
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
-DOTFILES_DIR="$(cd "$(dirname "${SELF}")/../../.." && pwd)"
+SWAY_DIR="$(cd "$(dirname "${SELF}")/../../.." && pwd)"
+# shellcheck source=../../../vars.sh
+source "${SWAY_DIR}/vars.sh"
 
-# Colores solo si la salida es un terminal: nd-doctor se tee-a a un log en el bootstrap
-# y los escapes ANSI ensuciarían ese archivo.
+# Colores solo si la salida es un terminal (en el bootstrap se tee-a a un log).
 if [[ -t 1 ]]; then
     C_OK=$'\033[0;32m'; C_BAD=$'\033[0;31m'; C_WHY=$'\033[0;33m'; C_OFF=$'\033[0m'
 else
@@ -45,48 +39,138 @@ fi
 
 pass() { printf '  %sOK  %s %s\n' "${C_OK}" "${C_OFF}" "$1"; ((++ok)); }
 miss() { printf '  %sFALTA%s %s\n      %s↳ %s%s\n' "${C_BAD}" "${C_OFF}" "$1" "${C_WHY}" "$2" "${C_OFF}"; ((++fail)); }
-# No cuenta como falla: la condición no se puede evaluar acá (p.ej. bootstrap headless).
 omit() { printf '  %sSKIP %s %s\n      %s↳ %s%s\n' "${C_WHY}" "${C_OFF}" "$1" "${C_WHY}" "$2" "${C_OFF}"; ((++skip)); }
 
-# check_file <ruta> <por qué nos importa> — basta con que exista.
+# check_file <ruta> <por qué> — basta con que exista.
 check_file() {
     if [[ -e "$1" ]]; then pass "$1"; else miss "$1" "$2"; fi
 }
-
-# check_grep <ruta> <token> <por qué> — además de existir, debe CONTENER el token. Para
-# archivos del Spin que arrancan algo: si una versión futura mantiene el nombre pero le
-# saca lo que asumimos (el comando que lanza el daemon), check_file daría un falso OK.
+# check_grep <ruta> <token> <por qué> — además debe CONTENER el token (si el Spin mantiene
+# el nombre pero le saca el comando que asumimos, check_file daría un falso OK).
 check_grep() {
     if grep -qs -- "$2" "$1"; then pass "$1 ($2)"; else miss "$1" "$3"; fi
 }
+# check_eq <qué> <esperado> <actual> <por qué>
+check_eq() {
+    if [[ "$2" == "$3" ]]; then pass "$1 = $2"; else miss "$1 = '${3:-}' (esperado '$2')" "$4"; fi
+}
 
+have_user_manager() { systemctl --user show-environment >/dev/null 2>&1; }
+have_graphical()    { [[ "$(systemctl --user is-active graphical-session.target 2>/dev/null)" == "active" ]]; }
+
+# ----------------------------------------------------------------------------------------
 echo "Archivos del Spin de los que depende este setup:"
-# layered-include: lo invoca el include de ~/.config/sway/config para encadenar
-# /usr/share → /etc → ~/.config. Sin él, nuestros overrides de config.d no cargan.
 check_file /usr/libexec/sway/layered-include \
     "sway/config lo usa para el include en capas; sin esto NINGÚN override de config.d aplica"
-# Estos arrancan daemons que nuestra config asume corriendo (no los lanzamos nosotros):
-# chequeamos el token clave, no solo la existencia.
 check_grep /usr/share/sway/config.d/90-bar.conf swaybar_command \
     "arranca waybar (swaybar_command); por eso no hay 'exec waybar' nuestro"
 check_grep /usr/share/sway/config.d/90-swayidle.conf swayidle \
     "consume \$lock_timeout/\$screen_timeout de sway/config; sin esto no hay lock por idle"
 check_grep /usr/share/sway/config.d/95-autostart-policykit-agent.conf lxqt-policykit-agent \
     "arranca el agente polkit (lxqt-policykit); sin esto los prompts de privilegios fallan"
-# Media keys: las bindea el Spin (no nosotros, a diferencia de volumen/brillo que sí
-# override-amos por swayosd). Si el Spin renombra/saca este archivo, play/next/prev
-# dejan de andar en silencio.
 check_grep /usr/share/sway/config.d/60-bindings-media.conf playerctl \
     "provee las teclas de medios (play/next/prev → playerctl); no las bindeamos nosotros"
+check_file /usr/libexec/sway-systemd/locale1-xkb-config \
+    "sway/config lo ejecuta para tomar el layout de teclado de locale1; sin esto el layout queda en 'us'"
+check_grep /etc/sway/config.d/10-systemd-cgroups.conf assign-cgroups \
+    "mueve cada app a su propio scope de systemd; sin esto systemd-oomd no ve a las apps"
 
+# Archivos en /usr/share/sway/config.d que ningún RPM posee: algo (una versión vieja de
+# este setup, o una edición a mano) escribió ahí. Rompe la regla "no tocar /usr/share" y
+# es una segunda fuente que compite con nuestros overrides.
+stray=()
+for f in /usr/share/sway/config.d/*.conf; do
+    [[ -e "${f}" ]] || continue
+    rpm -qf "${f}" &>/dev/null || stray+=("${f}")
+done
+if ((${#stray[@]} == 0)); then
+    pass "/usr/share/sway/config.d solo tiene archivos de RPM"
+else
+    miss "${#stray[@]} archivo(s) sin dueño en /usr/share/sway/config.d: ${stray[*]}" \
+        "huérfanos de una versión vieja del setup; 01-locale-datetime-keyboard.sh retira el de teclado"
+fi
+
+# ----------------------------------------------------------------------------------------
 echo
-echo "Suposiciones del entorno propio:"
+echo "Lo que vars.sh y el bootstrap prometen sobre esta máquina:"
 
-# ~/.bashrc NO se versiona: viene de /etc/skel y es un archivo real. Todo nuestro shell
-# (prompt, alias, fzf, tmux) cuelga de que ese archivo recorra ~/.bashrc.d. Si un reset
-# del home o una edición a mano se lo lleva, stow sigue dejando los archivos y no pasa
-# absolutamente nada — falla silenciosa perfecta.
-# Los "~/..." de abajo son texto para mostrar, no rutas a expandir: SC2088 no aplica.
+# Outputs: los nombres de sway coinciden con los conectores DRM del kernel, así se
+# pueden validar sin sesión. Un nombre equivocado deja a kanshi sin perfil y al lid
+# switch sin efecto, sin ningún error visible.
+for var in OUTPUT_INTERNAL OUTPUT_EXTERNAL; do
+    name="${!var}"
+    if compgen -G "/sys/class/drm/card*-${name}" >/dev/null; then
+        pass "${var}=${name} existe como conector DRM"
+    else
+        miss "${var}=${name} no es un conector de esta máquina" \
+            "ver 'ls /sys/class/drm' o 'swaymsg -t get_outputs' y corregir vars.sh (kanshi/lid switch dependen de esto)"
+    fi
+done
+
+# Lo que seteó 01-locale-datetime-keyboard.sh. Un `set-x11-keymap` sin --no-convert
+# borraba el keymap de consola y nadie lo veía.
+check_eq "VC Keymap" "${KEYMAP}" "$(localectl status 2>/dev/null | awk -F': ' '/VC Keymap/{print $2}')" \
+    "lo setea 01-locale-datetime-keyboard.sh (localectl --no-convert set-keymap)"
+check_eq "X11 Layout" "${KEYMAP_X11}" "$(localectl status 2>/dev/null | awk -F': ' '/X11 Layout/{print $2}')" \
+    "lo setea 01-locale-datetime-keyboard.sh; de acá lo toma sway vía locale1-xkb-config"
+check_eq "Timezone" "${TIMEZONE}" "$(timedatectl show -p Timezone --value 2>/dev/null)" \
+    "lo setea 01-locale-datetime-keyboard.sh (timedatectl set-timezone)"
+check_eq "LANG" "${LOCALE}" "$(localectl status 2>/dev/null | sed -n 's/.*LANG=//p')" \
+    "lo setea 01-locale-datetime-keyboard.sh (localectl set-locale)"
+
+# sysctl de 11-memory.sh: que lo escrito en el drop-in sea lo que corre.
+SYSCTL_FILE=/etc/sysctl.d/90-nd-zram.conf
+if [[ -r "${SYSCTL_FILE}" ]]; then
+    while IFS='=' read -r key want; do
+        key="${key// /}"; want="${want// /}"
+        [[ -n "${key}" && "${key}" != \#* ]] || continue
+        check_eq "sysctl ${key}" "${want}" "$(sysctl -n "${key}" 2>/dev/null)" \
+            "declarado en ${SYSCTL_FILE} (11-memory.sh); 'sysctl --system' lo aplica"
+    done < "${SYSCTL_FILE}"
+else
+    miss "${SYSCTL_FILE}" "lo escribe 11-memory.sh; sin él los vm.* vuelven a los defaults de swap en disco"
+fi
+
+# Units de sistema que el bootstrap habilita/deshabilita.
+check_eq "systemd-oomd" "active" "$(systemctl is-active systemd-oomd 2>/dev/null)" \
+    "lo habilita 11-memory.sh"
+check_eq "dnf5-automatic.timer" "active" "$(systemctl is-active dnf5-automatic.timer 2>/dev/null)" \
+    "lo habilita 12-auto-updates.sh (descarga de updates en background)"
+if systemctl list-unit-files rsyslog.service &>/dev/null; then
+    check_eq "rsyslog" "inactive" "$(systemctl is-active rsyslog 2>/dev/null)" \
+        "lo deshabilita 11-memory.sh (journald ya cubre el log)"
+fi
+
+# Daemons de sesión que lanza systemd --user (SESSION_SERVICES en vars.sh). Antes iban
+# por exec_always de sway y se morían sin que nadie lo notara.
+if ! have_graphical; then
+    omit "daemons de sesión (${SESSION_SERVICES[*]})" "sin sesión gráfica (¿bootstrap headless?)"
+else
+    for svc in "${SESSION_SERVICES[@]}"; do
+        state="$(systemctl --user is-active "${svc}" 2>/dev/null || true)"
+        if [[ "${state}" == "active" ]]; then
+            pass "${svc} activo"
+        else
+            miss "${svc} está '${state:-?}'" \
+                "lo habilita setup/08-systemd-user.sh; ver 'systemctl --user status ${svc}'"
+        fi
+    done
+    # Los watchers de cliphist sí van por `exec` de sway (no son daemons con recurso
+    # exclusivo); solo chequeamos que existan.
+    if pgrep -x wl-paste >/dev/null; then
+        pass "watchers de cliphist (wl-paste) corriendo"
+    else
+        miss "no hay wl-paste corriendo" "los lanza sway/config (exec wl-paste --watch cliphist store); sin ellos no hay historial de portapapeles"
+    fi
+fi
+
+# ----------------------------------------------------------------------------------------
+echo
+echo "Integridad del despliegue:"
+
+# ~/.bashrc viene de /etc/skel y no se versiona; todo el shell cuelga de que recorra
+# ~/.bashrc.d. Si un reset del home se lo lleva, stow sigue dejando los archivos y no
+# pasa nada: falla silenciosa perfecta.
 # shellcheck disable=SC2088
 if grep -qs 'bashrc\.d' "${HOME}/.bashrc"; then
     pass "~/.bashrc carga ~/.bashrc.d"
@@ -95,9 +179,8 @@ else
         "sin ese loop no se aplica nada de dotfiles/.bashrc.d (prompt, alias, fzf, tmux)"
 fi
 
-# Dueño del bus de notificaciones. Debe ser swaync: es quien lo arranca sway/config y el
-# que está tematizado. Si otro daemon (dunst, mako) gana la carrera por el nombre de
-# D-Bus, las notificaciones salen con OTRO estilo o no salen — sin error visible.
+# Dueño del bus de notificaciones: debe ser swaync (el tematizado). Si otro daemon gana
+# el nombre de D-Bus, las notificaciones salen con otro estilo o no salen, sin error.
 if ! busctl --user --no-pager status >/dev/null 2>&1; then
     omit "dueño de org.freedesktop.Notifications" "sin bus de sesión (¿bootstrap headless?)"
 else
@@ -106,7 +189,7 @@ else
         2>/dev/null | awk '{print $2}')"
     if [[ -z "${notif_pid}" ]]; then
         miss "org.freedesktop.Notifications sin dueño" \
-            "no hay daemon de notificaciones corriendo; swaync debería lanzarlo sway/config"
+            "no hay daemon de notificaciones; swaync.service lo habilita 08-systemd-user.sh"
     else
         notif_cmd="$(ps -p "${notif_pid}" -o comm= 2>/dev/null || true)"
         if [[ "${notif_cmd}" == swaync* ]]; then
@@ -118,10 +201,9 @@ else
     fi
 fi
 
-# Timers de usuario nd-*. Los deja stow y los habilita 08-systemd-user.sh; que el archivo
-# exista no implica que esté habilitado ni corriendo.
+# Timers nd-*: que el archivo exista no implica que esté habilitado ni corriendo.
 UNIT_DIR="${HOME}/.config/systemd/user"
-if ! systemctl --user show-environment >/dev/null 2>&1; then
+if ! have_user_manager; then
     omit "timers nd-*" "sin systemd --user (¿bootstrap headless?)"
 else
     shopt -s nullglob
@@ -142,13 +224,9 @@ else
     fi
 fi
 
-# Units de usuario en failed. Complementa (no reemplaza) al chequeo del bus de arriba:
-# ese pregunta "¿quién es dueño del nombre?" y puede dar OK mientras una unit del mismo
-# daemon quedó caída. Fue exactamente el punto ciego que dejó pasar el race de swaync
-# (sway lo lanzaba con exec_always y D-Bus activaba además swaync.service; la segunda
-# instancia moría y systemd la dejaba en failed, con el bus igual servido por la primera).
-# Una unit en failed no se recupera sola: solo se ve si alguien la mira.
-if ! systemctl --user show-environment >/dev/null 2>&1; then
+# Units de usuario en failed: una unit caída no se reintenta sola, solo se ve si alguien
+# la mira. Complementa al chequeo del bus (que puede dar OK con la unit caída al lado).
+if ! have_user_manager; then
     omit "units de usuario en failed" "sin systemd --user (¿bootstrap headless?)"
 else
     mapfile -t failed_units < <(
@@ -163,8 +241,8 @@ else
     fi
 fi
 
-# Symlinks rotos apuntando al repo. Los deja un rename/borrado de un dotfile: 04-stow.sh
-# los limpia al correr, así que si aparecen acá es que el stow quedó desfasado del repo.
+# Symlinks rotos apuntando al repo: los deja un rename/borrado de un dotfile. 04-stow.sh
+# los limpia al correr; si aparecen acá, el stow quedó desfasado del repo.
 broken=()
 for pkg in .bashrc.d .config .local; do
     [[ -d "${HOME}/${pkg}" ]] || continue
@@ -179,6 +257,7 @@ else
         "el stow quedó desfasado del repo; re-correr setup/04-stow.sh los limpia"
 fi
 
+# ----------------------------------------------------------------------------------------
 echo
 if ((fail > 0)); then
     printf '%s%d suposición(es) rotas%s, %d ok%s. Revisar el README.\n' \
@@ -186,6 +265,6 @@ if ((fail > 0)); then
         "$( ((skip > 0)) && printf ', %d salteadas' "${skip}")"
     exit 1
 fi
-printf '%sTodo en orden%s (%d/%d%s). El baseline del Spin y el entorno son los esperados.\n' \
+printf '%sTodo en orden%s (%d/%d%s). El Spin, vars.sh y el despliegue coinciden con la máquina.\n' \
     "${C_OK}" "${C_OFF}" "${ok}" "${ok}" \
     "$( ((skip > 0)) && printf ', %d salteadas' "${skip}")"

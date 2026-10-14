@@ -1,0 +1,16 @@
+# OSD de volumen/brillo/caps-lock. El paquete swayosd (COPR) no trae unit de usuario, así
+# que esta es nuestra. Lo habilita 08-systemd-user.sh (SESSION_SERVICES en vars.sh); los
+# binds de config.d/60-bindings-{volume,brightness}.conf le hablan vía swayosd-client.
+[Unit]
+Description=SwayOSD server (on-screen display for volume/brightness/caps)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecCondition=/bin/sh -c '[ -n "$WAYLAND_DISPLAY" ]'
+ExecStart=/usr/bin/swayosd-server
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,6 +1,0 @@
-# Night light (wlsunset). GENERADO desde 10-wlsunset.conf.in por setup/04-stow.sh —
-# los @LATITUDE@/@LONGITUDE@ vienen de vars.sh (única fuente de verdad). El
-# 10-wlsunset.conf generado está git-ignored; editá el template .in, no el output.
-#
-# `pkill -x` mantiene idempotente a exec_always ante `reload` (sin daemon duplicado).
-exec_always pkill -x wlsunset; exec wlsunset -l @LATITUDE@ -L @LONGITUDE@
